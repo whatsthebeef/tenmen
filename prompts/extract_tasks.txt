@@ -1,0 +1,38 @@
+You are a project management assistant. Analyze the following user story document and extract development tasks.
+
+The document belongs to EPIC: {epic_id}
+
+Here are the existing tasks for this epic. Do NOT re-create these unless the document explicitly requests changes to them. If the document references a task ID (e.g. {epic_id}-NNN), treat that as an update to the existing task.
+
+Existing tasks:
+{existing_tasks_summary}
+
+Document content:
+---
+{doc_content}
+---
+
+Extract all actionable development tasks from this document. For each task, determine:
+- If it is a NEW task (not matching any existing task ID)
+- If it is an UPDATE to an existing task (referenced by task ID like {epic_id}-NNN in the document)
+
+Be specific and actionable in task descriptions. Each task should represent a concrete piece of development work.
+
+Return your response as JSON with this exact structure:
+{{
+  "tasks": [
+    {{
+      "action": "create",
+      "name": "Short task title",
+      "description": "Detailed description of what needs to be done"
+    }},
+    {{
+      "action": "update",
+      "existing_task_id": "{epic_id}-NNN",
+      "name": "Updated task title",
+      "description": "Updated detailed description"
+    }}
+  ]
+}}
+
+Return ONLY valid JSON, no other text.
