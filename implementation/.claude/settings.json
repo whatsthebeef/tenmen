@@ -1,0 +1,89 @@
+{
+  "mcpServers": {
+    "google-sheets": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-google-sheets"
+      ],
+      "env": {
+        "GOOGLE_SHEETS_CREDENTIALS_PATH": "${HOME}/.config/gcloud/application_default_credentials.json"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npx jasmine:*)",
+      "Bash(while read file)",
+      "Bash(do spec_file=\"$file%.ts.spec.ts\" if [ -f \"$spec_file\" ])",
+      "Bash(then echo \"HAS_SPEC: $file -> $spec_file\" else echo \"NO_SPEC: $file\" fi done)",
+      "Bash(yarn build)",
+      "Bash(for line in 154 160 250 256 352 358 448 454 544 550)",
+      "Bash(do echo \"=== Line $line ===\")",
+      "Bash(done)",
+      "Bash(yarn test:*)",
+      "Bash(cat:*)",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" yarn ng test:*)",
+      "Bash(find:*)",
+      "Bash(git checkout:*)",
+      "Bash(git log:*)",
+      "Bash(node:*)",
+      "Bash(yarn cbt:*)",
+      "Bash(yarn clean:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(git show:*)",
+      "Bash(npx ng test:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx jest:*)",
+      "Bash(npm test:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx ng build:*)",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/shared-drawing-section.store.spec.ts' 2>&1 | grep -E \"FAILED|✗|✘|Error|Expected\")",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/shared-drawing-section.store.spec.ts' 2>&1 | grep -E \"FAILED|SUCCESS|TOTAL\")",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/fabric.component.spec.ts' 2>&1 | grep -E \"FAILED|Expected|keyboard\" | head -30)",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/fabric.component.spec.ts' 2>&1 | grep -E \"FAILED|SUCCESS|TOTAL\" | tail -5)",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' 2>&1 | grep -E \"FAILED|TOTAL\" | tail -10)",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' 2>&1 | grep \"FAILED\")",
+      "Bash(npx gulp --tasks 2>&1 | grep -E 'contentIndex|buildContentItemIndex')",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:fabric5.fabricjs.com)",
+      "WebFetch(domain:fabricjs.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(cd /Users/john/dev/pocketlab-notebook/services/app && NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include 'src/app/stores/entry-store-automaton/modification-strategy.spec.ts' --include 'src/app/stores/entry-store-automaton/operation-state-machine.spec.ts' 2>&1 | grep -E '\\(TOTAL|FAILED|SUCCESS|Executed|SUMMARY|Chrome|Error|✗|✓|SPEC|Spec|spec|describe|it\\\\s|PASSED|passed|failed|Ran|Tests|tests|modification|operation|ModificationStrategy|OperationStateMachine|^[[:space:]]*[✓✗]|^\\\\s+[0-9]+ spec|HeadlessChrome|Finished|Complete\\)')",
+      "Bash(npx ng test --watch=false 2>&1 > /tmp/app-test-output.txt; echo \"exit: $?\")",
+      "Bash(npx karma start karma.conf.js --single-run 2>&1 | grep -E \"\\(FAILED|TOTAL|Executed|ERROR|TypeError|Cannot read\\)\" | head -30)",
+      "Bash(cd /Users/john/dev/pocketlab-notebook && npx nx test app --testPathPattern=\"create-individual-sc-from-version|create-lg-from-version|create-lgs-from-version|loader.directive\" --no-cache 2>&1 | tail -80)",
+      "Bash(python3 -c \"\ncss = open\\('/Users/john/dev/pocketlab-notebook/node_modules/quill/dist/quill.snow.css'\\).read\\(\\)\nidx = css.find\\('monospace'\\)\nwhile idx != -1:\n    print\\(css[max\\(0,idx-150\\):idx+100]\\)\n    print\\('---'\\)\n    idx = css.find\\('monospace', idx+1\\)\n\")",
+      "Bash(yarn workspaces foreach -Ap --dry-run run build 2>&1 | head -40)",
+      "Bash(yarn workspaces list --json 2>/dev/null | head -30)",
+      "Bash(yarn install 2>&1)",
+      "Bash(yarn workspaces foreach -Apt --dry-run run build 2>&1)",
+      "Bash(yarn workspaces foreach -Apv run build --dry-run 2>&1 || true)",
+      "Bash(yarn workspaces foreach -Apv run clean 2>&1 | grep \"^\\\\[\" | head -20)",
+      "Bash(yarn workspaces foreach -Apv --dry-run run clean 2>&1)",
+      "Bash(yarn workspaces foreach -Av run clean 2>&1)",
+      "Bash(yarn workspaces foreach --topological-dev -Av --dry-run run build 2>&1 || true)",
+      "Bash(cd /Users/john/dev/pocketlab-notebook/services/websocket && rm -rf dist tsconfig.tsbuildinfo && yarn build 2>&1 | tail -30)",
+      "Bash(yarn run -B tsc --build 2>&1)",
+      "Bash(./node_modules/.bin/tsc --build 2>&1 | tail -5)",
+      "Bash(yarn install --mode=skip-build 2>&1 | tail -5)",
+      "mcp__atlassian__getAccessibleAtlassianResources",
+      "mcp__atlassian__getVisibleJiraProjects",
+      "mcp__atlassian__searchJiraIssuesUsingJql",
+      "mcp__atlassian__getJiraIssue",
+      "Bash(git apply:*)",
+      "Read(//Users/john/dev/pocketlab-notebook/.claude/worktrees/agent-a5386e38/**)",
+      "Bash(python3 /tmp/check_unused.py /Users/john/dev/pocketlab-notebook/.claude/worktrees/agent-a5386e38/services/app)",
+      "Bash(git worktree:*)",
+      "Bash(yarn install:*)"
+    ],
+    "deny": [],
+    "defaultMode": "acceptEdits"
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  }
+}
