@@ -1,18 +1,21 @@
 {
-  "mcpServers": {
-    "google-sheets": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@anthropic/mcp-google-sheets"
-      ],
-      "env": {
-        "GOOGLE_SHEETS_CREDENTIALS_PATH": "${HOME}/.config/gcloud/application_default_credentials.json"
-      }
-    }
-  },
   "permissions": {
     "allow": [
+      "Bash(python -m pip install -e \".[dev]\")",
+      "Bash(python3 -m venv .venv)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(source /Users/john/dev/tenmen/.venv/bin/activate)",
+      "Bash(python -c \"from tenmen.orchestrator import Orchestrator; print\\(''All imports OK''\\)\")",
+      "Bash(python -c \"from tenmen.init import run_init; print\\(''init imports OK''\\)\")",
+      "Bash(python -c \"from tenmen.__main__ import main; print\\(''main imports OK''\\)\")",
+      "Bash(python -c \"from tenmen.init import run_init; from tenmen.drive import DriveClient; print\\(''All imports OK''\\)\")",
+      "Bash(npx --yes @google/clasp --version)",
+      "Bash(npx @google/clasp push)",
+      "Bash(yes)",
+      "Bash(npx:*)",
+      "Bash(git checkout:*)",
+      "Bash(git mv:*)",
       "Bash(npx jasmine:*)",
       "Bash(while read file)",
       "Bash(do spec_file=\"$file%.ts.spec.ts\" if [ -f \"$spec_file\" ])",
@@ -77,13 +80,22 @@
       "Read(//Users/john/dev/pocketlab-notebook/.claude/worktrees/agent-a5386e38/**)",
       "Bash(python3 /tmp/check_unused.py /Users/john/dev/pocketlab-notebook/.claude/worktrees/agent-a5386e38/services/app)",
       "Bash(git worktree:*)",
-      "Bash(yarn install:*)"
+      "Bash(yarn install:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"
   },
   "sandbox": {
     "enabled": true,
-    "autoAllowBashIfSandboxed": true
+    "autoAllowBashIfSandboxed": true,
+    "allow": [
+      "net:api.github.com",
+      "net:github.com",
+      "net:sheets.googleapis.com",
+      "net:docs.google.com"
+    ]
   }
 }
