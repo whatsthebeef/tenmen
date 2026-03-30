@@ -9,32 +9,73 @@ var FEATURE_DOC_PATTERN = /^F(\d+)\s+/i;
 // Quick setup — call from editor to configure using CONFIG values
 // ============================================================
 
-function configure() {
-  if (!CONFIG.SHARED_DRIVE_ID) {
-    Logger.log('Set CONFIG.SHARED_DRIVE_ID in Config.js first, or run setup() to list available drives.');
+// configure() is now handled via the web app setup form.
+// After setup, call finalizeSetup() from the editor to create resources and start polling.
+function finalizeSetup() {
+  if (!isConfigured()) {
+    Logger.log('Not configured. Open the web app URL in a browser to run setup.');
     return;
   }
 
-  // Check if spreadsheet exists by name
+  var driveId = getSharedDriveId();
+
+  // Create spreadsheet and folders if they don't exist
   if (!getSpreadsheetId()) {
-    Logger.log('Tenmen Tasks spreadsheet not found. Running selectDrive to create resources...');
-    selectDrive(CONFIG.SHARED_DRIVE_ID);
-    return;
+    Logger.log('Creating Tenmen Tasks spreadsheet...');
+    createSpreadsheetInDrive('Tenmen Tasks', driveId);
+    _spreadsheetIdCache = null;
   }
 
-  // Everything exists — ensure tabs and trigger are set up
+  Logger.log('Ensuring folders exist...');
+  findOrCreateFolder(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
+  findOrCreateFolder(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
+  findOrCreateFolder(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
+
   initializeSheet();
   installTrigger();
   setLastRunTime(new Date());
 
-  if (CONFIG.WEB_APP_URL) {
-    _writeActionLinks(CONFIG.WEB_APP_URL);
+  var webAppUrl = getWebAppUrl();
+  if (webAppUrl) {
+    _writeActionLinks(webAppUrl);
     Logger.log('Actions tab updated.');
-  } else {
-    Logger.log('CONFIG.WEB_APP_URL not set. Deploy as web app, then set it in Config.js and run configure() again.');
   }
 
-  Logger.log('Configuration verified. Polling active.');
+  Logger.log('Setup complete. Polling active.');
+}
+
+function _writeActionLinks(webAppUrl) {
+  var ssId = getSpreadsheetId();
+  if (!ssId) return;
+  var ss = SpreadsheetApp.openById(ssId);
+
+  var sheet = ss.getSheetByName('Actions');
+  if (!sheet) {
+    sheet = ss.insertSheet('Actions');
+  } else {
+    sheet.clear();
+  }
+
+  var summaryUrl = webAppUrl + '?action=process_last_summary';
+  var userStoryUrl = webAppUrl + '?action=process_last_user_story';
+
+  sheet.getRange('A1').setValue('Tenmen Actions').setFontWeight('bold').setFontSize(14);
+  sheet.getRange('A2').setValue('Click the links below to trigger processing manually.');
+
+  sheet.getRange('A4').setValue('Process Last Meeting Summary');
+  sheet.getRange('B4').setFormula('=HYPERLINK("' + summaryUrl + '", "Run")');
+  sheet.getRange('C4').setValue('Generates Feature Document Change Proposal(s) from the latest transcript');
+
+  sheet.getRange('A6').setValue('Process Last Feature Document Change');
+  sheet.getRange('B6').setFormula('=HYPERLINK("' + userStoryUrl + '", "Run")');
+  sheet.getRange('C6').setValue('Generates Task List Change Proposal from the most recently modified feature doc');
+
+  sheet.setColumnWidth(1, 280);
+  sheet.setColumnWidth(2, 80);
+  sheet.setColumnWidth(3, 500);
+
+  sheet.getRange('B4').setFontColor('#1a73e8').setFontWeight('bold');
+  sheet.getRange('B6').setFontColor('#1a73e8').setFontWeight('bold');
 }
 
 // ============================================================
@@ -61,8 +102,8 @@ function selectDrive(driveId) {
     return;
   }
 
-  if (!CONFIG.GEMINI_API_KEY) {
-    Logger.log('ERROR: Set CONFIG.GEMINI_API_KEY in Config.js before running setup.');
+  if (!getGeminiApiKey()) {
+    Logger.log('ERROR: Gemini API key not configured. Run setup via the web app first.');
     return;
   }
 
@@ -71,9 +112,9 @@ function selectDrive(driveId) {
   createSpreadsheetInDrive('Tenmen Tasks', driveId);
 
   Logger.log('Creating folders...');
-  findOrCreateFolder(driveId, CONFIG.PROPOSALS_FOLDER_NAME);
-  findOrCreateFolder(driveId, CONFIG.ARCHIVE_FOLDER_NAME);
-  findOrCreateFolder(driveId, CONFIG.TECHNICAL_NOTES_FOLDER_NAME);
+  findOrCreateFolder(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
+  findOrCreateFolder(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
+  findOrCreateFolder(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
   Logger.log('Folders created');
 
   // Clear cache so getSpreadsheetId resolves fresh
@@ -88,7 +129,7 @@ function selectDrive(driveId) {
 
   Logger.log('');
   Logger.log('Setup complete! All resources found by name — no IDs to copy.');
-  Logger.log('Deploy as web app and set CONFIG.WEB_APP_URL in Config.js.');
+  Logger.log('Setup complete. Run finalizeSetup() after configuring via the web app.');
 }
 
 // ============================================================
@@ -167,7 +208,7 @@ function _detectAndDebounce(driveId, lastRun) {
 // ============================================================
 
 function _processStableFiles(driveId) {
-  var stableFiles = getStableFiles(CONFIG.DEBOUNCE_MINUTES);
+  var stableFiles = getStableFiles(getDebounceMinutes());
 
   for (var i = 0; i < stableFiles.length; i++) {
     var file = stableFiles[i];

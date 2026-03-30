@@ -56,15 +56,15 @@ function findOrCreateFolder(driveId, name) {
 }
 
 function findTranscriptsFolder(driveId) {
-  return findFolderByName(driveId, CONFIG.TRANSCRIPTS_FOLDER_NAME);
+  return findFolderByName(driveId, getFolderName('TRANSCRIPTS_FOLDER_NAME'));
 }
 
 function getExcludedFolderIds(driveId) {
   var ids = new Set();
-  var transcripts = findFolderByName(driveId, CONFIG.TRANSCRIPTS_FOLDER_NAME);
-  var proposals = findFolderByName(driveId, CONFIG.PROPOSALS_FOLDER_NAME);
-  var archive = findFolderByName(driveId, CONFIG.ARCHIVE_FOLDER_NAME);
-  var techNotes = findFolderByName(driveId, CONFIG.TECHNICAL_NOTES_FOLDER_NAME);
+  var transcripts = findFolderByName(driveId, getFolderName('TRANSCRIPTS_FOLDER_NAME'));
+  var proposals = findFolderByName(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
+  var archive = findFolderByName(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
+  var techNotes = findFolderByName(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
   if (transcripts) ids.add(transcripts);
   if (proposals) ids.add(proposals);
   if (archive) ids.add(archive);
@@ -264,7 +264,7 @@ function findFeatureDocById(driveId, featureId) {
  * Lives in the technical_notes/ folder.
  */
 function findOrCreateTechnicalNotesDoc(driveId, featureId) {
-  var folderId = findOrCreateFolder(driveId, CONFIG.TECHNICAL_NOTES_FOLDER_NAME);
+  var folderId = findOrCreateFolder(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
   var docName = featureId + ' Technical Notes';
 
   // Search for existing doc in the technical_notes folder

@@ -64,7 +64,7 @@ function applyApprovedTaskProposal(proposalId, record) {
   var tasks = getProposedTaskList(record.docId);
   Logger.log('Applying ' + tasks.length + ' task operations for ' + featureId);
 
-  var today = new Date().toISOString().split('T')[0];
+  var now = new Date().toISOString();
 
   tasks.forEach(function(task) {
     if (task.action === 'create') {
@@ -75,8 +75,7 @@ function applyApprovedTaskProposal(proposalId, record) {
         acceptance_criteria: task.acceptance_criteria || '',
         notes: task.notes || '',
         status: 'To Do',
-        sourceDoc: featureId,
-        dateCreated: today,
+        dateCreated: now,
       });
       Logger.log('Created task: ' + task.id);
     } else if (task.action === 'update') {
@@ -145,6 +144,15 @@ function _applyProposalToFeatureDoc(proposalDocId, featureDocId) {
         }
       }
       if (startIndex > 0) break;
+    }
+  }
+
+  // Skip the "Proposed Document" heading if present after the horizontal rule
+  if (startIndex < numChildren) {
+    var next = sourceBody.getChild(startIndex);
+    if (next.getType() === DocumentApp.ElementType.PARAGRAPH &&
+        next.asParagraph().getText() === 'Proposed Document') {
+      startIndex++;
     }
   }
 

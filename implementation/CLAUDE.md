@@ -1,10 +1,8 @@
 # Developer Agent System
 
-This repository uses a multi-agent workflow orchestrated by Claude Code. The orchestrator runs one phase at a time, pausing between phases so the user can review and edit the output before continuing.
+This repository uses a multi-agent workflow orchestrated by Claude Code. The orchestrator runs all phases end-to-end, interacting with the task sheet via a web app API. Each phase writes an output file to `.reviews/` so the user can review the result and restart from any phase if needed.
 
 ## Workflow Overview
-
-The orchestrator runs all phases end-to-end. Each phase writes an output file to `.reviews/` so the user can review the result and restart from any phase if needed.
 
 1. **Phase 1** — Pick task, create branch → `.reviews/task-<id>-context.md`
 2. **Phase 2** — Investigate, produce plan → `.reviews/task-<id>-plan.md`
@@ -16,16 +14,19 @@ The orchestrator runs all phases end-to-end. Each phase writes an output file to
 ### Running
 
 ```
-/run-task <sheet-id>                          # Full run from phase 1
-/run-task <sheet-id> --from 3 --task F1S1T1   # Restart from phase 3 (e.g., after editing the plan)
+/run-task                                     # Full run from phase 1
+/run-task --from 3 --task F1S1T1              # Restart from phase 3 (e.g., after editing the plan)
 ```
 
-## Google Sheet Structure
+The web app URL is stored in `.claude/memory/` per project. You'll be prompted to set it on first run.
 
-| Task ID | Description | Acceptance Criteria | Notes | Dev Notes | Status |
-|---------|-------------|---------------------|-------|-----------|--------|
+## Task Sheet Structure
 
-- **Dev Notes**: Written by the developer before setting the task to `Ready`. Passed to the investigator and implementer for additional context.
+| id | name | description | acceptance_criteria | notes | dev_notes | status | date_created |
+|----|------|-------------|---------------------|-------|-----------|--------|--------------|
+
+- **dev_notes**: Written by the developer before setting the task to `Ready`. Passed to the investigator and implementer for additional context.
+- **date_created**: ISO datetime. Tasks are claimed FIFO (oldest first).
 - Relevant statuses: `Ready`, `Working`, `Finished`, `Error`
 
 ## Conventions
@@ -40,7 +41,7 @@ The orchestrator runs all phases end-to-end. Each phase writes an output file to
 
 ```
 .claude/
-├── settings.json          # MCP servers, permissions
+├── settings.json          # Permissions, sandbox config
 ├── agents/
 │   ├── orchestrator.md    # Main agent — runs one phase at a time
 │   ├── investigator.md    # Analyzes task, builds implementation plan

@@ -6,6 +6,10 @@
 - Google Workspace account with access to a Shared Drive
 - Gemini API key from https://aistudio.google.com/apikey
 
+## Concepts
+
+Each Tenmen **app** is a separate Apps Script project with its own deployment, configuration, Shared Drive, and task spreadsheet. You can run multiple apps from the same codebase (e.g. one per team or project). App configs are stored in `planning/deployments/<name>.clasp.json`.
+
 ## Initial Setup
 
 ### 1. Install clasp
@@ -23,91 +27,117 @@ npx @google/clasp login
 
 This opens a browser to authenticate with your Google account.
 
-### 3. Create the standalone script project
+### 3. Create an app
 
 ```bash
-cd planning
-npx @google/clasp create --type standalone --title "Tenmen"
+./deploy.sh myapp --create
 ```
 
-**Important:** This overwrites `appsscript.json` with defaults. After running, restore the correct manifest:
+This creates a new Apps Script project named "Tenmen — myapp" and saves the project config to `planning/deployments/myapp.clasp.json`.
+
+On first run you'll be prompted for your Google Workspace domain (or leave blank for a personal account). This is saved to `planning/.deploy-config` and reused for all apps.
+
+### 4. Deploy
 
 ```bash
-git checkout -- appsscript.json
-npx @google/clasp push --force
+./deploy.sh myapp
 ```
 
-### 4. Set the Gemini API key
+This pushes the code and creates the first web app deployment. The web app URL opens automatically in your browser.
 
-Edit `planning/Config.js` and set `CONFIG.GEMINI_API_KEY` to your key:
+### 5. Configure via the web app
 
-```js
-GEMINI_API_KEY: 'your-key-here',
-```
+On first visit you'll be prompted to authorize the script (you may need to click Advanced > Go to Tenmen). After authorizing, the setup form appears.
 
-Then push:
+Fill in:
+- **Gemini API Key** — from https://aistudio.google.com/apikey
+- **Gemini Model** — defaults to `gemini-3-pro-preview`, change if needed
+- **Shared Drive ID** — from the Shared Drive URL: `drive.google.com/drive/folders/THIS_ID`
+- **Approver Emails** — comma-separated list
 
-```bash
-npx @google/clasp push --force
-```
+Click **Save & Initialize**. This automatically:
+- Stores all config in Script Properties (persists across deploys)
+- Creates the **Tenmen Tasks** spreadsheet in the Shared Drive
+- Creates `proposals/`, `archive/`, `technical_notes/` folders
+- Initializes spreadsheet tabs (Tasks, Proposals, Approvals, Actions)
+- Installs the 1-minute polling trigger
+- Saves the web app URL
 
-### 5. Run setup in the Apps Script editor
+No need to open the Apps Script editor.
 
-```bash
-npx @google/clasp open
-```
+### 6. Prepare your Shared Drive
 
-This opens the Apps Script editor in your browser.
-
-1. Select `setup` from the function dropdown and click **Run**
-2. Accept the permissions prompt (you may need to click Advanced > Go to Tenmen)
-3. Check the execution log — it lists your Shared Drives with IDs
-4. Select `selectDrive` from the dropdown — but since it needs a parameter, add this temporarily at the end of `setup()` in the editor:
-
-```js
-selectDrive('YOUR_SHARED_DRIVE_ID');
-```
-
-5. Run `setup` again. It will:
-   - Create the **Tenmen Tasks** spreadsheet in the Shared Drive
-   - Create `proposals/`, `archive/` folders
-   - Initialize spreadsheet tabs (Tasks, Proposals, Approvals, Config)
-   - Install the 1-minute polling trigger
-
-6. Remove the `selectDrive(...)` line after running.
-
-### 6. Deploy as web app
-
-In the Apps Script editor:
-
-1. Click **Deploy > New deployment**
-2. Select type: **Web app**
-3. Execute as: **User accessing the web app**
-4. Who has access: **Anyone within [your organization]**
-5. Click **Deploy**
-6. Copy the web app URL
-
-Then in the Apps Script editor, run:
-
-```js
-setWebAppUrl('YOUR_WEB_APP_URL')
-```
-
-This saves the URL and creates an **Actions** tab in the spreadsheet with trigger links.
-
-### 7. Configure approvers
-
-Open the **Tenmen Tasks** spreadsheet > **Config** tab. Add a row:
-
-| key | value |
-|-----|-------|
-| approvers | alice@example.com,bob@example.com |
-
-### 8. Prepare your Shared Drive
-
-- User story documents at the root, named with epic ID prefix: `0001 Feature Name`
-- Create a `transcripts` folder for meeting summaries
+- Feature documents at the root, named with feature ID prefix: `F1 Feature Name`
+- Create a `transcripts` folder for meeting summaries (or let the system create it)
 - Drop Gemini meeting summaries into the `transcripts` folder
+
+### 7. Reconfigure (optional)
+
+Visit the web app URL with `?action=setup`, or click "Reconfigure settings" on the landing page.
+
+## Managing Multiple Apps
+
+### Create a second app
+
+```bash
+./deploy.sh otherapp --create
+./deploy.sh otherapp
+```
+
+Then configure it via the web app — each app has its own Shared Drive, approvers, etc.
+
+### List available apps
+
+```bash
+./deploy.sh
+```
+
+Running without arguments lists all configured apps.
+
+### Deploy a specific app
+
+```bash
+./deploy.sh myapp
+```
+
+### Deploy and merge config into a project repo
+
+```bash
+./deploy.sh myapp --merge /path/to/repo
+```
+
+This deploys the app, then merges the Claude Code agent config into the target repo and writes the web app URL to the repo's `.claude/memory/` so the orchestrator can find it.
+
+### Open the Apps Script editor
+
+```bash
+./deploy.sh myapp --open
+```
+
+## Deploying Changes
+
+### Push and deploy
+
+```bash
+./deploy.sh myapp
+```
+
+This pushes the code to the app's Apps Script project and updates its deployment. Config stored in Script Properties is not affected.
+
+Subsequent deploys update the existing deployment in place (same URL).
+
+### When redeployment is needed
+
+- **Always needed** when changing code used by the web app (WebApp.js, Approvals.js, Confirmation.html, or any function called from doGet/doPost)
+- **Not needed** when changes only affect the poll cycle (Code.js trigger logic, Prompts.js, Gemini.js) — these run from the time-based trigger which always uses the latest pushed code
+
+### Re-authorization
+
+If you add new OAuth scopes to `appsscript.json`, you need to re-authorize:
+
+1. Go to https://myaccount.google.com/permissions
+2. Find "Tenmen — myapp" and remove access
+3. Visit the web app URL — it will prompt for new permissions
 
 ## Modifying Code
 
@@ -117,7 +147,7 @@ Open the **Tenmen Tasks** spreadsheet > **Config** tab. Add a row:
 planning/
   appsscript.json      — Manifest (scopes, services, web app config)
   Code.js              — Setup, triggers, poll cycle, flow dispatch
-  Config.js            — Constants, script properties helpers
+  Config.js            — Script Properties config, getters, defaults
   Drive.js             — Shared Drive operations, doc read/write
   Sheets.js            — Spreadsheet CRUD, approvals, config
   Debounce.js          — 10-min debounce for change detection
@@ -127,77 +157,41 @@ planning/
   Approvals.js         — Approval logic, apply approved changes
   Email.js             — Email notifications
   Archive.js           — Move approved proposals to archive folder
-  WebApp.js            — Web app doGet handler for approve/resubmit
+  WebApp.js            — Web app handlers (doGet, doPost, setup form)
   Confirmation.html    — Web app confirmation page template
+  deployments/         — Per-app clasp configs (one .clasp.json per app)
 ```
 
 ### Editing prompts
 
 The AI prompts are in `planning/Prompts.js`. Edit them to change how Gemini:
-- Identifies relevant epics from meeting summaries
-- Proposes user story document changes
+- Identifies relevant features from meeting summaries
+- Proposes feature document changes
 - Proposes task list changes
 
-### Editing the Gemini model
+### Changing the Gemini model
 
-In `planning/Config.js`, change `CONFIG.GEMINI_MODEL`:
-
-```js
-GEMINI_MODEL: 'gemini-2.5-flash',  // or 'gemini-2.5-pro', etc.
-```
+Visit `?action=setup` on the web app and change the model field, or update it directly in Script Properties via the Apps Script editor.
 
 ### Changing the debounce time
 
-In `planning/Config.js`:
+The default is 10 minutes. To change it, set `CONFIG_DEBOUNCE_MINUTES` in Script Properties via the Apps Script editor (Project Settings > Script Properties).
 
-```js
-DEBOUNCE_MINUTES: 10,  // change to desired minutes
+## Task Sheet API
+
+The web app exposes two POST endpoints for the orchestrator agent:
+
+**Claim next task** — picks the oldest Ready task (FIFO) and sets it to Working:
+```
+POST <web-app-url>
+{"action": "claim_next"}
 ```
 
-## Deploying Changes
-
-### Push code changes
-
-```bash
-cd planning
-npx @google/clasp push --force
+**Finish task** — sets a task to Finished:
 ```
-
-This updates the script but **does not** update the live web app deployment.
-
-### Update the web app deployment
-
-To update the existing deployment (keeps the same URL):
-
-```bash
-npx @google/clasp deploy -i YOUR_DEPLOYMENT_ID -d "Description of changes"
+POST <web-app-url>
+{"action": "finish_task", "taskId": "F1S1T1"}
 ```
-
-Find your deployment ID with:
-
-```bash
-npx @google/clasp deployments
-```
-
-### Push and deploy in one command
-
-```bash
-cd planning
-npx @google/clasp push --force && npx @google/clasp deploy -i YOUR_DEPLOYMENT_ID -d "Description"
-```
-
-### When redeployment is needed
-
-- **Always needed** when changing code used by the web app (WebApp.js, Approvals.js, Confirmation.html, or any function called from doGet)
-- **Not needed** when changes only affect the poll cycle (Code.js trigger logic, Prompts.js, Gemini.js) — these run from the time-based trigger which always uses the latest pushed code
-
-### Re-authorization
-
-If you add new OAuth scopes to `appsscript.json`, users need to re-authorize:
-
-1. Go to https://myaccount.google.com/permissions
-2. Find "Tenmen" and remove access
-3. Open the Apps Script editor, run any function — it will prompt for new permissions
 
 ## Manual Actions
 
@@ -205,15 +199,13 @@ If you add new OAuth scopes to `appsscript.json`, users need to re-authorize:
 
 From the spreadsheet: **Actions** tab > click **Run** next to "Process Last Meeting Summary"
 
-Or from the Apps Script editor: select `processLastSummary` and click Run.
+### Process last feature document change
 
-### Process last user story change
-
-From the spreadsheet: **Actions** tab > click **Run** next to "Process Last User Story Change"
+From the spreadsheet: **Actions** tab > click **Run** next to "Process Last Feature Document Change"
 
 ### Stop the polling trigger
 
-From the Apps Script editor: select `uninstallTrigger` and click Run.
+From the Apps Script editor (`./deploy.sh myapp --open`): select `uninstallTrigger` and click Run.
 
 ### Restart the polling trigger
 
@@ -225,26 +217,34 @@ From the Apps Script editor: select `installTrigger` and click Run.
 
 Apps Script editor > **Executions** (left sidebar) — shows all recent runs with logs and errors.
 
+```bash
+./deploy.sh myapp --open
+```
+
 ### "Drive is not defined" error
 
-The `appsscript.json` manifest was overwritten. Restore it and push:
+The `appsscript.json` manifest was overwritten. Restore it and deploy:
 
 ```bash
 git checkout -- planning/appsscript.json
-npx @google/clasp push --force
+./deploy.sh myapp
 ```
 
 ### "Specified permissions are not sufficient" error
 
-A new scope is needed. Add it to `appsscript.json` `oauthScopes` array, push, then re-authorize (see above).
+A new scope is needed. Add it to `appsscript.json` `oauthScopes` array, deploy, then re-authorize (see above).
 
 ### Web app returns "Invalid Request"
 
-The deployment is stale. Redeploy with `npx @google/clasp deploy -i DEPLOYMENT_ID`.
+The deployment is stale. Run `./deploy.sh myapp` to update it.
+
+### Web app shows setup form unexpectedly
+
+Config was lost from Script Properties. Fill in the form again — it will restore everything.
 
 ### Proposals not generating
 
-1. Check that epic docs are named with numeric prefix (e.g. `0001 Feature Name`)
+1. Check that feature docs are named with feature ID prefix (e.g. `F1 Feature Name`)
 2. Check that meeting summaries are in the `transcripts` folder
 3. Check the execution logs for errors
-4. Try running `processLastSummary` manually from the editor
+4. Try clicking **Run** on the Actions tab in the spreadsheet

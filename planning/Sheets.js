@@ -5,7 +5,7 @@
 const MAIN_TAB = 'Tasks';
 const PROPOSALS_TAB = 'Proposals';
 const APPROVALS_TAB = 'Approvals';
-const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'status', 'source_doc', 'date_created'];
+const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'dev_notes', 'status', 'date_created'];
 const PROPOSALS_HEADERS = ['proposal_id', 'type', 'feature_id', 'status', 'doc_id', 'doc_link', 'created_date'];
 const APPROVALS_HEADERS = ['proposal_id', 'user_email', 'status', 'timestamp', 'doc_link'];
 
@@ -67,9 +67,9 @@ function getAllTasks(featureId, excludeSignedOff) {
       description: String(row[2]),
       acceptance_criteria: String(row[3]),
       notes: String(row[4]),
-      status: String(row[5]),
-      sourceDoc: String(row[6]),
-      dateCreated: String(row[7]),
+      dev_notes: String(row[5]),
+      status: String(row[6]),
+      dateCreated: row[7] instanceof Date ? row[7].toISOString() : String(row[7]),
     };
     if (featureId && task.featureId !== featureId) return;
     if (excludeSignedOff && task.status === 'Signed Off') return;
@@ -87,7 +87,7 @@ function getTaskById(taskId) {
 function addTask(task) {
   var ss = getSpreadsheet();
   var sheet = ss.getSheetByName(MAIN_TAB);
-  sheet.appendRow([task.id, task.name, task.description, task.acceptance_criteria || '', task.notes || '', task.status, task.sourceDoc, task.dateCreated]);
+  sheet.appendRow([task.id, task.name, task.description, task.acceptance_criteria || '', task.notes || '', task.dev_notes || '', task.status, task.dateCreated]);
 }
 
 function updateTask(taskId, updates) {
@@ -102,8 +102,8 @@ function updateTask(taskId, updates) {
       if (updates.description !== undefined) sheet.getRange(rowNum, 3).setValue(updates.description);
       if (updates.acceptance_criteria !== undefined) sheet.getRange(rowNum, 4).setValue(updates.acceptance_criteria);
       if (updates.notes !== undefined) sheet.getRange(rowNum, 5).setValue(updates.notes);
-      if (updates.status !== undefined) sheet.getRange(rowNum, 6).setValue(updates.status);
-      if (updates.sourceDoc !== undefined) sheet.getRange(rowNum, 7).setValue(updates.sourceDoc);
+      if (updates.dev_notes !== undefined) sheet.getRange(rowNum, 6).setValue(updates.dev_notes);
+      if (updates.status !== undefined) sheet.getRange(rowNum, 7).setValue(updates.status);
       return true;
     }
   }
@@ -124,8 +124,11 @@ function deleteTask(taskId) {
   return false;
 }
 
+// Tasks are appended in the order they appear in the changeset, preserving
+// chronological order. The claim_next endpoint picks the oldest Ready task
+// by date_created (FIFO), so insertion order matters.
 function applyTaskChanges(changeset, featureId) {
-  var today = new Date().toISOString().split('T')[0];
+  var now = new Date().toISOString();
 
   (changeset.additions || []).forEach(function(task) {
     addTask({
@@ -135,8 +138,7 @@ function applyTaskChanges(changeset, featureId) {
       acceptance_criteria: task.acceptance_criteria || '',
       notes: task.notes || '',
       status: task.status || 'To Do',
-      sourceDoc: task.sourceDoc || '',
-      dateCreated: today,
+      dateCreated: now,
     });
   });
 
@@ -194,6 +196,31 @@ function getProposalRecord(proposalId) {
     }
   }
   return null;
+}
+
+function getLatestActiveProposals() {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(PROPOSALS_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, PROPOSALS_HEADERS.length).getValues();
+  var proposals = [];
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][3]) === 'active') {
+      proposals.push({
+        proposalId: String(data[i][0]),
+        type: String(data[i][1]),
+        featureId: String(data[i][2]),
+        status: String(data[i][3]),
+        docId: String(data[i][4]),
+        docLink: String(data[i][5]),
+        createdDate: String(data[i][6]),
+      });
+    }
+  }
+  // Sort by created date descending
+  proposals.sort(function(a, b) { return b.createdDate.localeCompare(a.createdDate); });
+  return proposals;
 }
 
 function updateProposalStatus(proposalId, newStatus) {
@@ -332,6 +359,4 @@ function cleanupApprovalRows(proposalId) {
 // Approvers
 // ============================================================
 
-function getApproverEmails() {
-  return (CONFIG.APPROVERS || []).filter(Boolean);
-}
+// getApproverEmails is now defined in Config.js

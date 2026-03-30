@@ -59,7 +59,7 @@ Tenmen automates the management of feature documentation and development task li
   - Acceptance Criteria are listed below each story
 
 ### Technical Notes Document (Google Doc)
-- **Location**: Shared Drive root
+- **Location**: `technical_notes/` folder in Shared Drive
 - **Filename**: `F<number> Technical Notes` (e.g. `F1 Technical Notes`)
 - **Auto-created**: Generated when the first meeting summary is processed for a feature
 - **Content structure**:
@@ -207,9 +207,9 @@ Tenmen automates the management of feature documentation and development task li
 | description | Full user story text |
 | acceptance_criteria | Acceptance criteria for this task |
 | notes | Technical implementation notes |
-| status | `To Do`, `Doing`, `Review`, `Signed Off` |
-| source_doc | Source document name |
-| date_created | ISO date |
+| dev_notes | Developer notes added before setting task to Ready |
+| status | `To Do`, `Ready`, `Working`, `Doing`, `Review`, `Signed Off`, `Finished`, `Error` |
+| date_created | ISO datetime (e.g. `2026-03-29T10:15:00.000Z`). Tasks are processed FIFO by this value. |
 
 **Protected statuses**: Tasks with status `Doing`, `Review`, or `Signed Off` cannot be modified or deleted by the system.
 
@@ -233,11 +233,6 @@ Tenmen automates the management of feature documentation and development task li
 | timestamp | ISO timestamp when approved |
 | doc_link | Link to proposal doc |
 
-### Config Tab
-| Key | Value | Purpose |
-|-----|-------|---------|
-| approvers | email1@co.com,email2@co.com | Comma-separated approver list |
-
 ### Actions Tab
 | Action | Description |
 |--------|-------------|
@@ -251,8 +246,8 @@ Tenmen automates the management of feature documentation and development task li
 **Trigger**: New or modified Google Doc in the `transcripts/` folder
 
 **Steps**:
-1. Poll cycle detects change in `transcripts/` folder
-2. 10-minute debounce waits for editing to stop
+1. Poll cycle (every 1 minute) detects change in `transcripts/` folder
+2. Debounce waits for editing to stop (configurable, default 10 minutes)
 3. Gemini reads the meeting summary and all known Feature Documents
 4. Gemini identifies which features were discussed (returns list of Feature IDs)
 5. For each identified feature:
@@ -295,7 +290,7 @@ Tenmen automates the management of feature documentation and development task li
 
 **Steps**:
 1. Poll cycle detects change to a Feature Document at the drive root
-2. 10-minute debounce (skipped if change came from Flow 1 approval via circular trigger guard)
+2. Debounce waits for editing to stop (skipped if change came from Flow 1 approval via circular trigger guard)
 3. Read updated Feature Document
 4. Read current Task List from spreadsheet (excluding Signed Off tasks)
 5. Read Technical Notes document for the feature
@@ -357,20 +352,65 @@ Tenmen automates the management of feature documentation and development task li
 - Proposal doc moved to `archive/` folder
 - Tasks are NOT auto-applied to the Task List (manual action)
 
+## Configuration
+
+All configuration is stored in Script Properties (not in code). Set via the web app setup form on first deployment, or reconfigure at `?action=setup`.
+
+| Property | Description |
+|----------|-------------|
+| GEMINI_API_KEY | Gemini API key for AI calls |
+| GEMINI_MODEL | Gemini model ID (default: `gemini-3-pro-preview`) |
+| SHARED_DRIVE_ID | Google Shared Drive ID to monitor |
+| APPROVERS | Comma-separated approver email addresses |
+| WEB_APP_URL | Auto-detected on setup |
+| DEBOUNCE_MINUTES | Minutes to wait after last change before processing (default: 10) |
+
+## Web App API
+
+The web app serves both the approval UI (GET) and task API endpoints (POST) for the Claude Code orchestrator.
+
+### GET endpoints
+
+| URL | Description |
+|-----|-------------|
+| `<url>` | Landing page (status, approver list, links) |
+| `<url>?action=setup` | Configuration form |
+| `<url>?action=approve&proposalId=...` | Record an approval |
+| `<url>?action=resubmit&proposalId=...` | Reset approvals and notify |
+| `<url>?action=process_last_summary` | Manually trigger meeting summary processing |
+| `<url>?action=process_last_user_story` | Manually trigger feature doc processing |
+
+### POST endpoints
+
+Used by the Claude Code orchestrator to interact with the task list.
+
+**Claim next task** — picks the oldest Ready task (FIFO by date_created), sets it to Working:
+```json
+{"action": "claim_next"}
+→ {"id": "F1S1T1", "name": "...", "description": "...", "acceptance_criteria": "...", "notes": "...", "dev_notes": "...", "status": "Working"}
+```
+
+**Finish task** — sets a task to Finished:
+```json
+{"action": "finish_task", "taskId": "F1S1T1"}
+→ {"taskId": "F1S1T1", "status": "Finished"}
+```
+
 ## Folder Structure
 
 ```
 Shared Drive/
 ├── F1 Teacher Support Documents          ← Feature Document
-├── F1 Technical Notes                    ← Technical Notes (auto-created)
 ├── F2 Student Dashboard                  ← Feature Document
-├── F2 Technical Notes                    ← Technical Notes (auto-created)
 ├── transcripts/                          ← Meeting summaries dropped here
 │   └── Tech Meeting - 2026-03-25...     ← Gemini meeting summary
+├── technical_notes/                      ← Auto-created per feature
+│   ├── F1 Technical Notes
+│   └── F2 Technical Notes
 ├── proposals/                            ← Active proposal docs
 │   ├── Proposal: F1 — Feature Doc...
 │   └── Proposal: TK-F1 — Task List...
 ├── archive/                              ← Approved proposals moved here
 │   └── Proposal: F1 — Feature Doc...
-└── Tenmen Tasks                          ← Spreadsheet (Tasks, Proposals, Approvals, Config, Actions)
+└── Tenmen Tasks                          ← Spreadsheet (Tasks, Proposals, Approvals, Actions)
 ```

@@ -7,7 +7,7 @@
  */
 function callGemini(prompt, maxTokens) {
   maxTokens = maxTokens || 8192;
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + CONFIG.GEMINI_MODEL + ':generateContent?key=' + CONFIG.GEMINI_API_KEY;
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + getGeminiModel() + ':generateContent?key=' + getGeminiApiKey();
 
   var payload = {
     contents: [{ parts: [{ text: prompt }] }],

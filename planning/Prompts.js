@@ -43,16 +43,41 @@ LANGUAGE RULES for the feature document:
 Return your response as JSON with this exact structure:
 {
   "changes": [
-    "Added: New user story ${featureId}S5 for document export. Rationale: Export functionality was discussed as a priority for Q2. (Source: meeting summary, section on document sharing)",
-    "Modified: ${featureId}S2 acceptance criteria updated to require auto-save. Rationale: Manual saving was identified as a friction point. (Source: meeting summary, UX discussion)",
-    "Removed: ${featureId}S3 legacy API reference. Rationale: API has been deprecated and replaced by v2 endpoint."
-  ]
+    {
+      "type": "modified",
+      "location": "${featureId}S2 acceptance criterion 2.1",
+      "original": "The exact original text being changed (copy verbatim from the current document)",
+      "proposed": "The new text that should replace it",
+      "reason": "Brief explanation of why this change is being made",
+      "source": "The specific section or quote from the meeting summary that triggered this change"
+    },
+    {
+      "type": "added",
+      "location": "${featureId}S3 (new user story)",
+      "original": null,
+      "proposed": "The new text to add",
+      "reason": "Why this addition is needed",
+      "source": "Meeting summary section that prompted this"
+    },
+    {
+      "type": "removed",
+      "location": "${featureId}S1 acceptance criterion 1.5",
+      "original": "The exact text being removed (copy verbatim)",
+      "proposed": null,
+      "reason": "Why this is being removed",
+      "source": "Meeting summary section that prompted this"
+    }
+  ],
+  "proposedDocument": "The COMPLETE full text of the updated feature document with all changes applied. This must be the entire document, not just the changed parts. Apply all the changes listed above to produce this final text. Do NOT include any diff markers, annotations, or change tracking — just the clean final document text."
 }
 
-Each change summary item should include:
-- What changed (Added/Modified/Removed + which user story or section)
-- Rationale: brief explanation of why the change is being made
-- Source reference where helpful (e.g. which part of the meeting summary prompted the change)
+IMPORTANT rules for the response:
+- "original" must be copied VERBATIM from the current document — do not paraphrase
+- "proposed" must follow the LANGUAGE RULES above (succinct, declarative, no meeting references)
+- "source" should quote or reference the specific part of the meeting summary
+- "proposedDocument" must be the COMPLETE document with ALL changes applied as clean text
+- For "added" changes, "original" is null
+- For "removed" changes, "proposed" is null
 
 Return ONLY valid JSON, no other text.`;
 }

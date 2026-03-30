@@ -22,50 +22,97 @@ function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
   var folderId = getProposalsFolderId();
   var driveId = getSharedDriveId();
   var origDoc = findFeatureDocById(driveId, featureId);
+  var changes = geminiResult.changes || [];
+  var proposedDocument = geminiResult.proposedDocument || '';
 
-  // Step 1: Copy the Feature Document (preserves all formatting)
-  var docInfo;
+  // Step 1: Create proposal doc with approval links + change summary + proposed document
+  var docInfo = createProposalDoc('Proposal: ' + featureId + ' — Feature Document Update', folderId);
+  var doc = DocumentApp.openById(docInfo.fileId);
+  var body = doc.getBody();
+  body.clear();
+
+  // Approval links
+  _insertApprovalLinks(body, 0, proposalId);
+
+  body.appendParagraph('Source: ' + sourceFileName)
+    .editAsText().setForegroundColor('#666666');
+
+  // Link to original document
   if (origDoc) {
-    docInfo = copyDocToFolder(origDoc.fileId, 'Proposal: ' + featureId + ' — Feature Document Update', folderId);
-  } else {
-    docInfo = createProposalDoc('Proposal: ' + featureId + ' — Feature Document Update', folderId);
+    var origUrl = 'https://docs.google.com/document/d/' + origDoc.fileId + '/edit';
+    var linkPara = body.appendParagraph('Original document: ');
+    linkPara.editAsText().setForegroundColor('#666666');
+    var linkText = linkPara.appendText(origDoc.fileName || featureId);
+    linkText.setLinkUrl(origUrl);
+    linkText.setForegroundColor('#1a73e8');
   }
 
-  // Step 2: Apply visual diff markup using Docs API
-  var currentContent = origDoc ? readDocContent(origDoc.fileId) : '';
-  var changes = geminiResult.changes || [];
+  // Change summary
+  if (changes.length) {
+    body.appendParagraph('Change Summary')
+      .setHeading(DocumentApp.ParagraphHeading.HEADING2);
 
-  if (changes.length && currentContent) {
-    try {
-      var operations = callGeminiForFeatureDocVisualDiff(currentContent, changes, featureId);
-      Logger.log('Got ' + operations.length + ' visual diff operations');
-      if (operations.length) {
-        _applyVisualDiff(docInfo.fileId, operations);
+    for (var i = 0; i < changes.length; i++) {
+      var change = changes[i];
+      var typeLabel = (change.type || 'modified').toUpperCase();
+      var location = change.location || '';
+
+      body.appendParagraph(typeLabel + ': ' + location)
+        .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+
+      if (change.original) {
+        body.appendParagraph('Was:').editAsText().setBold(true);
+        var origPara = body.appendParagraph(change.original);
+        origPara.editAsText().setForegroundColor('#cf222e');
+        origPara.editAsText().setItalic(true);
+        origPara.editAsText().setBold(false);
       }
-    } catch (e) {
-      Logger.log('Could not apply visual diff: ' + e.message);
+
+      if (change.proposed) {
+        body.appendParagraph('Now:').editAsText().setBold(true);
+        var newPara = body.appendParagraph(change.proposed);
+        newPara.editAsText().setForegroundColor('#1a7f37');
+        newPara.editAsText().setItalic(true);
+        newPara.editAsText().setBold(false);
+      }
+
+      if (change.reason) {
+        body.appendParagraph('Reason: ' + change.reason)
+          .editAsText().setForegroundColor('#666666');
+      }
+
+      if (change.source) {
+        body.appendParagraph('Source: ' + change.source)
+          .editAsText().setForegroundColor('#666666');
+      }
+
+      body.appendParagraph(''); // spacing
     }
   }
 
-  // Step 3: Prepend change summary + approval links at the top
-  var doc = DocumentApp.openById(docInfo.fileId);
-  var body = doc.getBody();
+  // Horizontal rule separating summary from proposed document
+  body.appendHorizontalRule();
 
-  // Insert in reverse order (each insert at 0 pushes previous content down)
-  body.insertHorizontalRule(0);
+  // Proposed document (clean text, no diff markup)
+  body.appendParagraph('Proposed Document')
+    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
 
-  // Change summary with rationale
-  for (var i = changes.length - 1; i >= 0; i--) {
-    body.insertListItem(0, changes[i]);
+  if (proposedDocument) {
+    var lines = proposedDocument.split('\n');
+    for (var l = 0; l < lines.length; l++) {
+      body.appendParagraph(lines[l]);
+    }
+  } else {
+    body.appendParagraph('(No proposed document text was generated)')
+      .editAsText().setForegroundColor('#cf222e');
   }
-  if (changes.length) {
-    body.insertParagraph(0, 'Change Summary')
-      .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+
+  // Remove the empty first paragraph from clear()
+  var first = body.getChild(0);
+  if (first.getType() === DocumentApp.ElementType.PARAGRAPH && first.asParagraph().getText() === '') {
+    body.removeChild(first);
   }
 
-  body.insertParagraph(0, 'Source: ' + sourceFileName)
-    .editAsText().setForegroundColor('#666666');
-  _insertApprovalLinks(body, 0, proposalId);
   doc.saveAndClose();
 
   // Register in spreadsheet
@@ -75,10 +122,58 @@ function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
 }
 
 /**
- * Apply visual diff operations to a doc:
- * - Removals: strikethrough + red
- * - Additions: green text
- * - Replacements: old text strikethrough red, new text green
+ * Parse a document with <<<ADD>>>...<<<ENDADD>>> and <<<DEL>>>...<<<ENDDEL>>> markers
+ * into an array of { text, type } segments, split by newlines into separate paragraphs.
+ * type is 'normal', 'add', or 'del'.
+ */
+function _parseMarkedDocument(text) {
+  if (!text) return [{ text: '', type: 'normal' }];
+
+  var segments = [];
+  var regex = /<<<(ADD|DEL)>>>([\s\S]*?)<<<END\1>>>/g;
+  var lastIndex = 0;
+  var match;
+
+  while ((match = regex.exec(text)) !== null) {
+    // Plain text before this marker
+    if (match.index > lastIndex) {
+      var plain = text.substring(lastIndex, match.index);
+      _splitLines(plain, 'normal', segments);
+    }
+    // Marked text
+    var type = match[1] === 'ADD' ? 'add' : 'del';
+    _splitLines(match[2], type, segments);
+    lastIndex = regex.lastIndex;
+  }
+
+  // Remaining plain text
+  if (lastIndex < text.length) {
+    _splitLines(text.substring(lastIndex), 'normal', segments);
+  }
+
+  if (segments.length === 0) {
+    segments.push({ text: '', type: 'normal' });
+  }
+
+  return segments;
+}
+
+function _splitLines(text, type, segments) {
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    // Skip empty lines that would create blank paragraphs, unless it's a deliberate blank line
+    if (line === '' && i > 0 && i < lines.length - 1) {
+      segments.push({ text: '', type: type });
+    } else if (line !== '' || segments.length === 0) {
+      segments.push({ text: line, type: type });
+    }
+  }
+}
+
+/**
+ * (Legacy) Apply visual diff operations to a doc.
+ * Kept for reference but no longer used — replaced by inline marker approach.
  */
 function _applyVisualDiff(docId, operations) {
   // Filter out no-op replacements where find and replaceWith are identical

@@ -1,37 +1,26 @@
 // ============================================================
-// Configuration — edit these before running setup()
+// Configuration — all values stored in Script Properties
 // ============================================================
 
-const CONFIG = {
-  // Gemini API key (from https://aistudio.google.com/apikey)
-  GEMINI_API_KEY: 'AIzaSyBxbN0iQSpAnayAf1WbKma3-XYT64FR8BQ',
-
-  // Gemini model
-  GEMINI_MODEL: 'gemini-3.1-flash-lite-preview',
-
-  // Folder names within the Shared Drive
+// Defaults for values that don't need user input
+var CONFIG_DEFAULTS = {
+  GEMINI_MODEL: 'gemini-3-pro-preview',
   TRANSCRIPTS_FOLDER_NAME: 'transcripts',
   PROPOSALS_FOLDER_NAME: 'proposals',
   ARCHIVE_FOLDER_NAME: 'archive',
   TECHNICAL_NOTES_FOLDER_NAME: 'technical_notes',
-
-  // Debounce: wait this many minutes after last change before processing
-  DEBOUNCE_MINUTES: 10,
-
-  // Shared Drive ID (from Drive URL or setup() output)
-  SHARED_DRIVE_ID: '0AL43-hTVA8dNUk9PVA',
-
-  // Web App URL (from Deploy > Web app)
-  WEB_APP_URL: 'https://script.google.com/a/macros/thepocketlab.com/s/AKfycbwZ7ALbY6HjaL4qhsxuI8ULZU38r7R6UO2oanR--HHdHnguNd9AT6FZEaad5BiePVrdEg/exec',
-
-  // Approver email addresses
-  APPROVERS: [
-    'john.bower@thepocketlab.com',
-  ],
+  DEBOUNCE_MINUTES: '10',
 };
 
+// Keys that must be set by the user via the setup form
+var REQUIRED_CONFIG_KEYS = ['GEMINI_API_KEY', 'SHARED_DRIVE_ID', 'APPROVERS'];
+
+function getAppName() {
+  return getConfigValue('APP_NAME') || 'Tenmen';
+}
+
 // ============================================================
-// Script Properties helpers (used for debounce and timestamps only)
+// Script Properties helpers
 // ============================================================
 
 function getProp(key) {
@@ -51,17 +40,51 @@ function getAllProps() {
 }
 
 // ============================================================
-// Getters — resolve by name from the Shared Drive
+// Config getters — read from Script Properties with defaults
 // ============================================================
 
+function getConfigValue(key) {
+  var val = getProp('CONFIG_' + key);
+  if (val !== null && val !== undefined) return val;
+  return CONFIG_DEFAULTS[key] || null;
+}
+
+function setConfigValue(key, value) {
+  setProp('CONFIG_' + key, value);
+}
+
+function isConfigured() {
+  for (var i = 0; i < REQUIRED_CONFIG_KEYS.length; i++) {
+    if (!getConfigValue(REQUIRED_CONFIG_KEYS[i])) return false;
+  }
+  return true;
+}
+
 function getSharedDriveId() {
-  return CONFIG.SHARED_DRIVE_ID;
+  return getConfigValue('SHARED_DRIVE_ID');
+}
+
+function getGeminiApiKey() {
+  return getConfigValue('GEMINI_API_KEY');
+}
+
+function getGeminiModel() {
+  return getConfigValue('GEMINI_MODEL');
+}
+
+function getDebounceMinutes() {
+  return parseInt(getConfigValue('DEBOUNCE_MINUTES'), 10) || 10;
+}
+
+function getFolderName(key) {
+  return getConfigValue(key);
 }
 
 var _spreadsheetIdCache = null;
 function getSpreadsheetId() {
   if (_spreadsheetIdCache) return _spreadsheetIdCache;
   var driveId = getSharedDriveId();
+  if (!driveId) return null;
   var resp = Drive.Files.list({
     q: "'" + driveId + "' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and name = 'Tenmen Tasks' and trashed = false",
     fields: 'files(id)',
@@ -79,63 +102,29 @@ function getSpreadsheetId() {
 }
 
 function getProposalsFolderId() {
-  return findFolderByName(getSharedDriveId(), CONFIG.PROPOSALS_FOLDER_NAME);
+  return findFolderByName(getSharedDriveId(), getConfigValue('PROPOSALS_FOLDER_NAME'));
 }
 
 function getArchiveFolderId() {
-  return findFolderByName(getSharedDriveId(), CONFIG.ARCHIVE_FOLDER_NAME);
+  return findFolderByName(getSharedDriveId(), getConfigValue('ARCHIVE_FOLDER_NAME'));
 }
 
 function getWebAppUrl() {
-  return CONFIG.WEB_APP_URL;
+  return getConfigValue('WEB_APP_URL');
 }
 
 // ============================================================
-// Setup helpers — write IDs to Config.js via Logger (manual copy)
+// Approvers — stored as comma-separated string
 // ============================================================
 
-function setWebAppUrl(url) {
-  CONFIG.WEB_APP_URL = url;
-  Logger.log('Web app URL: ' + url);
-  Logger.log('IMPORTANT: Paste this into CONFIG.WEB_APP_URL in Config.js');
-  _writeActionLinks(url);
-  Logger.log('Action links written to spreadsheet.');
-}
-
-function _writeActionLinks(webAppUrl) {
-  var ss = SpreadsheetApp.openById(getSpreadsheetId());
-
-  var sheet = ss.getSheetByName('Actions');
-  if (!sheet) {
-    sheet = ss.insertSheet('Actions');
-  } else {
-    sheet.clear();
-  }
-
-  var summaryUrl = webAppUrl + '?action=process_last_summary';
-  var userStoryUrl = webAppUrl + '?action=process_last_user_story';
-
-  sheet.getRange('A1').setValue('Tenmen Actions').setFontWeight('bold').setFontSize(14);
-  sheet.getRange('A2').setValue('Click the links below to trigger processing manually.');
-
-  sheet.getRange('A4').setValue('Process Last Meeting Summary');
-  sheet.getRange('B4').setFormula('=HYPERLINK("' + summaryUrl + '", "Run")');
-  sheet.getRange('C4').setValue('Generates Feature Document Change Proposal(s) from the latest transcript');
-
-  sheet.getRange('A6').setValue('Process Last Feature Document Change');
-  sheet.getRange('B6').setFormula('=HYPERLINK("' + userStoryUrl + '", "Run")');
-  sheet.getRange('C6').setValue('Generates Task List Change Proposal from the most recently modified feature doc');
-
-  sheet.setColumnWidth(1, 280);
-  sheet.setColumnWidth(2, 80);
-  sheet.setColumnWidth(3, 500);
-
-  sheet.getRange('B4').setFontColor('#1a73e8').setFontWeight('bold');
-  sheet.getRange('B6').setFontColor('#1a73e8').setFontWeight('bold');
+function getApproverEmails() {
+  var val = getConfigValue('APPROVERS');
+  if (!val) return [];
+  return val.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
 }
 
 // ============================================================
-// Timestamps (these still use Script Properties — ephemeral state)
+// Timestamps
 // ============================================================
 
 function getLastRunTime() {

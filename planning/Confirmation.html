@@ -58,5 +58,10 @@
   <? if (data.docLink) { ?>
     <a class="back-link" href="<?= data.docLink ?>"><?= data.linkText || 'Back to Proposal Doc' ?></a>
   <? } ?>
+  <? if (data.secondaryLink) { ?>
+    <div style="margin-top: 16px;">
+      <a href="<?= data.secondaryLink ?>" style="color: #5f6368; font-size: 13px;"><?= data.secondaryLinkText || '' ?></a>
+    </div>
+  <? } ?>
 </body>
 </html>
