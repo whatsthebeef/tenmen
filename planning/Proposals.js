@@ -17,15 +17,13 @@ function generateProposalId(typePrefix, epicId) {
  * Create a user story change proposal as a Google Doc.
  * Returns the proposal ID.
  */
-function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
+function createUserStoryProposal(featureId, patchPlan, sourceFileName, targetDocId) {
   var proposalId = generateProposalId('FD', featureId);
   var folderId = getProposalsFolderId();
-  var driveId = getSharedDriveId();
-  var origDoc = findFeatureDocById(driveId, featureId);
-  var changes = geminiResult.changes || [];
-  var proposedDocument = geminiResult.proposedDocument || '';
+  var operations = patchPlan.operations || [];
+  var uncertainties = patchPlan.uncertainties || [];
 
-  // Step 1: Create proposal doc with approval links + change summary + proposed document
+  // Create proposal doc showing the patch plan for review
   var docInfo = createProposalDoc('Proposal: ' + featureId + ' — Feature Document Update', folderId);
   var doc = DocumentApp.openById(docInfo.fileId);
   var body = doc.getBody();
@@ -37,52 +35,71 @@ function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
   body.appendParagraph('Source: ' + sourceFileName)
     .editAsText().setForegroundColor('#666666');
 
-  // Link to original document
-  if (origDoc) {
-    var origUrl = 'https://docs.google.com/document/d/' + origDoc.fileId + '/edit';
-    var linkPara = body.appendParagraph('Original document: ');
+  // Link to the live document being updated
+  if (targetDocId) {
+    var targetUrl = 'https://docs.google.com/document/d/' + targetDocId + '/edit';
+    var linkPara = body.appendParagraph('Target document: ');
     linkPara.editAsText().setForegroundColor('#666666');
-    var linkText = linkPara.appendText(origDoc.fileName || featureId);
-    linkText.setLinkUrl(origUrl);
+    var linkText = linkPara.appendText(featureId + ' Feature Document');
+    linkText.setLinkUrl(targetUrl);
     linkText.setForegroundColor('#1a73e8');
   }
 
-  // Change summary
-  if (changes.length) {
-    body.appendParagraph('Change Summary')
+  body.appendParagraph(operations.length + ' proposed change' + (operations.length === 1 ? '' : 's'))
+    .editAsText().setForegroundColor('#666666');
+
+  // Render each operation as a reviewable change
+  if (operations.length) {
+    body.appendParagraph('Proposed Changes')
       .setHeading(DocumentApp.ParagraphHeading.HEADING2);
 
-    for (var i = 0; i < changes.length; i++) {
-      var change = changes[i];
-      var typeLabel = (change.type || 'modified').toUpperCase();
-      var location = change.location || '';
+    for (var i = 0; i < operations.length; i++) {
+      var op = operations[i];
+      var opType = (op.type || '').toUpperCase().replace(/_/g, ' ');
+      var location = op.location || '';
 
-      body.appendParagraph(typeLabel + ': ' + location)
+      body.appendParagraph((i + 1) + '. ' + opType + (location ? ' — ' + location : ''))
         .setHeading(DocumentApp.ParagraphHeading.HEADING3);
 
-      if (change.original) {
-        body.appendParagraph('Was:').editAsText().setBold(true);
-        var origPara = body.appendParagraph(change.original);
-        origPara.editAsText().setForegroundColor('#cf222e');
-        origPara.editAsText().setItalic(true);
-        origPara.editAsText().setBold(false);
+      // Show old content for replace/remove operations
+      if (op.match_text) {
+        body.appendParagraph('Current text:').editAsText().setBold(true);
+        var oldPara = body.appendParagraph(op.match_text);
+        oldPara.editAsText().setForegroundColor('#cf222e');
+        oldPara.editAsText().setItalic(true);
+        oldPara.editAsText().setBold(false);
       }
 
-      if (change.proposed) {
-        body.appendParagraph('Now:').editAsText().setBold(true);
-        var newPara = body.appendParagraph(change.proposed);
+      // Show new content depending on operation type
+      var newContent = op.new_text || '';
+      if (op.type === 'append_acceptance_criterion' && op.criterion) {
+        newContent = _formatCriterionForDisplay(op.criterion);
+      } else if (op.type === 'add_question') {
+        newContent = op.text || '';
+      } else if (op.type === 'insert_after') {
+        newContent = op.new_text || '';
+        if (op.after_text) {
+          body.appendParagraph('Insert after:').editAsText().setBold(true);
+          body.appendParagraph(op.after_text)
+            .editAsText().setForegroundColor('#666666').setItalic(true);
+        }
+      }
+
+      if (newContent) {
+        var label = op.match_text ? 'New text:' : 'Text:';
+        body.appendParagraph(label).editAsText().setBold(true);
+        var newPara = body.appendParagraph(newContent);
         newPara.editAsText().setForegroundColor('#1a7f37');
         newPara.editAsText().setItalic(true);
         newPara.editAsText().setBold(false);
       }
 
-      if (change.reason) {
-        body.appendParagraph('Reason: ' + change.reason)
+      if (op.reason) {
+        body.appendParagraph('Reason: ' + op.reason)
           .editAsText().setForegroundColor('#666666');
       }
-
-      if (change.source) {
-        body.appendParagraph('Source: ' + change.source)
+      if (op.source) {
+        body.appendParagraph('Source: ' + op.source)
           .editAsText().setForegroundColor('#666666');
       }
 
@@ -90,24 +107,24 @@ function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
     }
   }
 
-  // Horizontal rule separating summary from proposed document
-  body.appendHorizontalRule();
-
-  // Proposed document (clean text, no diff markup)
-  body.appendParagraph('Proposed Document')
-    .setHeading(DocumentApp.ParagraphHeading.HEADING2);
-
-  if (proposedDocument) {
-    var lines = proposedDocument.split('\n');
-    for (var l = 0; l < lines.length; l++) {
-      body.appendParagraph(lines[l]);
+  // Show uncertainties
+  if (uncertainties.length) {
+    body.appendParagraph('Uncertainties')
+      .setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    for (var u = 0; u < uncertainties.length; u++) {
+      body.appendListItem(uncertainties[u])
+        .editAsText().setForegroundColor('#b45309');
     }
-  } else {
-    body.appendParagraph('(No proposed document text was generated)')
-      .editAsText().setForegroundColor('#cf222e');
+    body.appendParagraph('');
   }
 
-  // Remove the empty first paragraph from clear()
+  // Store the patch plan JSON in the doc for later application (hidden at bottom)
+  body.appendHorizontalRule();
+  body.appendParagraph('PATCH_DATA_START').editAsText().setFontSize(1).setForegroundColor('#ffffff');
+  body.appendParagraph(JSON.stringify(patchPlan)).editAsText().setFontSize(1).setForegroundColor('#ffffff');
+  body.appendParagraph('PATCH_DATA_END').editAsText().setFontSize(1).setForegroundColor('#ffffff');
+
+  // Remove empty first paragraph from clear()
   var first = body.getChild(0);
   if (first.getType() === DocumentApp.ElementType.PARAGRAPH && first.asParagraph().getText() === '') {
     body.removeChild(first);
@@ -119,6 +136,108 @@ function createUserStoryProposal(featureId, geminiResult, sourceFileName) {
   addProposalRecord(proposalId, 'user_story', featureId, docInfo.fileId, docInfo.url);
 
   return proposalId;
+}
+
+/**
+ * Format a criterion object for display in the proposal doc.
+ */
+function _formatCriterionForDisplay(criterion) {
+  var text = (criterion.id ? criterion.id + ' ' : '') + criterion.text;
+  if (criterion.list_items && criterion.list_items.length) {
+    text += '\n' + _formatListItemsForDisplay(criterion.list_items, 1);
+  }
+  return text;
+}
+
+function _formatListItemsForDisplay(items, depth) {
+  var lines = [];
+  var indent = '';
+  for (var d = 0; d < depth; d++) indent += '  ';
+  for (var i = 0; i < items.length; i++) {
+    lines.push(indent + '- ' + items[i].text);
+    if (items[i].children && items[i].children.length) {
+      lines.push(_formatListItemsForDisplay(items[i].children, depth + 1));
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Read the stored patch plan JSON from a proposal doc.
+ */
+function readPatchPlanFromProposal(proposalDocId) {
+  var doc = DocumentApp.openById(proposalDocId);
+  var body = doc.getBody();
+  var numChildren = body.getNumChildren();
+
+  var capturing = false;
+  var jsonText = '';
+
+  for (var i = 0; i < numChildren; i++) {
+    var child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    var text = child.asParagraph().getText();
+
+    if (text === 'PATCH_DATA_START') {
+      capturing = true;
+      continue;
+    }
+    if (text === 'PATCH_DATA_END') {
+      break;
+    }
+    if (capturing) {
+      jsonText += text;
+    }
+  }
+
+  if (!jsonText) {
+    throw new Error('No patch data found in proposal doc');
+  }
+
+  return JSON.parse(jsonText);
+}
+
+/**
+ * Write an updated patch plan JSON back into a proposal doc,
+ * replacing the existing hidden patch data section.
+ */
+function savePatchPlanToProposal(proposalDocId, patchPlan) {
+  var doc = DocumentApp.openById(proposalDocId);
+  var body = doc.getBody();
+  var numChildren = body.getNumChildren();
+
+  // Find and remove existing patch data section
+  var startMarkerIdx = -1;
+  var endMarkerIdx = -1;
+  for (var i = 0; i < numChildren; i++) {
+    var child = body.getChild(i);
+    if (child.getType() !== DocumentApp.ElementType.PARAGRAPH) continue;
+    var text = child.asParagraph().getText();
+    if (text === 'PATCH_DATA_START') startMarkerIdx = i;
+    if (text === 'PATCH_DATA_END') endMarkerIdx = i;
+  }
+
+  // Remove old patch data (reverse order to preserve indices)
+  if (startMarkerIdx !== -1 && endMarkerIdx !== -1) {
+    for (var r = endMarkerIdx; r >= startMarkerIdx; r--) {
+      body.removeChild(body.getChild(r));
+    }
+    // Also remove the horizontal rule before it if present
+    if (startMarkerIdx > 0) {
+      var prev = body.getChild(startMarkerIdx - 1);
+      if (prev.getType() === DocumentApp.ElementType.HORIZONTAL_RULE) {
+        body.removeChild(prev);
+      }
+    }
+  }
+
+  // Append new patch data
+  body.appendHorizontalRule();
+  body.appendParagraph('PATCH_DATA_START').editAsText().setFontSize(1).setForegroundColor('#ffffff');
+  body.appendParagraph(JSON.stringify(patchPlan)).editAsText().setFontSize(1).setForegroundColor('#ffffff');
+  body.appendParagraph('PATCH_DATA_END').editAsText().setFontSize(1).setForegroundColor('#ffffff');
+
+  doc.saveAndClose();
 }
 
 /**

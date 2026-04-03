@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="config-bar" id="config-bar">
+    <label>Tenmen Web App URL</label>
+    <input type="text" id="web-app-url" placeholder="https://script.google.com/macros/s/.../exec">
+    <button id="save-config">Save</button>
+  </div>
+
+  <div class="section-header" id="source-section" style="display:none;">
+    <div class="section-label">Meeting Summary</div>
+    <div class="section-link" id="source-header"></div>
+  </div>
+
+  <div class="feature-docs-section" id="feature-docs-section" style="display:none;">
+    <div class="section-label">Review Patch For</div>
+    <div class="feature-docs-list" id="feature-docs-list"></div>
+  </div>
+
+  <div class="status-bar" id="status-bar"></div>
+
+  <div class="actions-panel" id="actions-panel" style="display:none;">
+    <button class="action-btn" id="btn-reload">Fetch Patches</button>
+    <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
+    <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
+    <button class="action-btn" id="btn-open-spreadsheet">Open Task Spreadsheet</button>
+    <button class="action-btn" id="btn-open-drive">Open Drive</button>
+    <button class="action-btn" id="btn-settings">Settings</button>
+    <div class="debug-output" id="debug-output" style="display:none;"></div>
+  </div>
+
+  <div class="settings-panel" id="settings-panel" style="display:none;">
+    <div class="section-label">Settings</div>
+    <div class="settings-field">
+      <label>Gemini API Key</label>
+      <input type="text" id="setting-gemini-key" placeholder="AIza...">
+    </div>
+    <div class="settings-field">
+      <label>Gemini Model</label>
+      <input type="text" id="setting-gemini-model" placeholder="gemini-2.0-flash">
+    </div>
+    <div class="settings-field">
+      <label>Shared Drive ID</label>
+      <input type="text" id="setting-drive-id" placeholder="0ABcDeFgHiJk...">
+    </div>
+    <div class="settings-field">
+      <label>Approver Emails (comma separated)</label>
+      <input type="text" id="setting-approvers" placeholder="alice@co.com, bob@co.com">
+    </div>
+    <div class="settings-field">
+      <label>Debounce Minutes</label>
+      <input type="text" id="setting-debounce" placeholder="10">
+    </div>
+    <div class="settings-actions">
+      <button class="action-btn" id="btn-save-settings">Save</button>
+      <button class="action-btn settings-cancel" id="btn-cancel-settings">Cancel</button>
+    </div>
+    <div class="settings-message" id="settings-message" style="display:none;"></div>
+  </div>
+
+  <div id="content">
+    <div class="loading" id="loading" style="display:none;">Loading patches...</div>
+    <div class="patch-list" id="patch-list"></div>
+    <div class="all-done" id="all-done" style="display:none;">All patches reviewed</div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

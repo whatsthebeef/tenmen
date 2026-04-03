@@ -65,10 +65,12 @@ function getExcludedFolderIds(driveId) {
   var proposals = findFolderByName(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
   var archive = findFolderByName(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
   var techNotes = findFolderByName(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
+  var patches = findFolderByName(driveId, getFolderName('PATCHES_FOLDER_NAME'));
   if (transcripts) ids.add(transcripts);
   if (proposals) ids.add(proposals);
   if (archive) ids.add(archive);
   if (techNotes) ids.add(techNotes);
+  if (patches) ids.add(patches);
   return ids;
 }
 
@@ -289,4 +291,107 @@ function findOrCreateTechnicalNotesDoc(driveId, featureId) {
   }, null, { supportsAllDrives: true });
 
   return { fileId: file.id, fileName: docName, isNew: true };
+}
+
+// ============================================================
+// Patch file operations (JSON files in patches/ folder)
+// ============================================================
+
+function findOrCreatePatchesFolder(driveId) {
+  return findOrCreateFolder(driveId, getFolderName('PATCHES_FOLDER_NAME'));
+}
+
+/**
+ * List ALL patch files across all features, sorted by creation time ascending (oldest first).
+ */
+function listAllPatchFiles(driveId) {
+  var folderId = findFolderByName(driveId, getFolderName('PATCHES_FOLDER_NAME'));
+  if (!folderId) return [];
+
+  var resp = Drive.Files.list({
+    q: "'" + folderId + "' in parents and name contains '-patch-' and trashed = false",
+    fields: 'files(id,name,createdTime)',
+    orderBy: 'createdTime asc',
+    corpora: 'drive',
+    driveId: driveId,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  return (resp.files || []).map(function(f) {
+    var featureMatch = f.name.match(/^(F\d+)-patch-/i);
+    return {
+      patchId: f.name.replace('.json', ''),
+      fileId: f.id,
+      fileName: f.name,
+      featureId: featureMatch ? featureMatch[1] : '',
+      created: f.createdTime,
+    };
+  });
+}
+
+/**
+ * List patch files for a feature, sorted by creation time descending.
+ */
+function listPatchFiles(driveId, featureId) {
+  var folderId = findFolderByName(driveId, getFolderName('PATCHES_FOLDER_NAME'));
+  if (!folderId) return [];
+
+  var namePrefix = featureId + '-patch-';
+  var resp = Drive.Files.list({
+    q: "'" + folderId + "' in parents and name contains '" + namePrefix + "' and trashed = false",
+    fields: 'files(id,name,createdTime)',
+    orderBy: 'createdTime desc',
+    corpora: 'drive',
+    driveId: driveId,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  return (resp.files || []).map(function(f) {
+    return { patchId: f.name.replace('.json', ''), fileId: f.id, fileName: f.name, created: f.createdTime };
+  });
+}
+
+/**
+ * Read and parse a patch JSON file from Drive.
+ */
+function readPatchFile(fileId) {
+  var url = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&supportsAllDrives=true';
+  var response = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Failed to read patch file: ' + response.getResponseCode());
+  }
+  return JSON.parse(response.getContentText());
+}
+
+/**
+ * Write a JSON patch file to the patches/ folder.
+ */
+function writePatchFile(driveId, fileName, jsonContent) {
+  var folderId = findOrCreatePatchesFolder(driveId);
+  var blob = Utilities.newBlob(JSON.stringify(jsonContent, null, 2), 'application/json', fileName);
+  var file = Drive.Files.create({
+    name: fileName,
+    parents: [folderId],
+  }, blob, { supportsAllDrives: true });
+  return file.id;
+}
+
+/**
+ * Update an existing patch JSON file.
+ */
+function updatePatchFile(fileId, jsonContent) {
+  var blob = Utilities.newBlob(JSON.stringify(jsonContent, null, 2), 'application/json');
+  Drive.Files.update({}, fileId, blob, { supportsAllDrives: true });
+}
+
+/**
+ * Delete a patch file from Drive.
+ */
+function deletePatchFile(fileId) {
+  Drive.Files.remove(fileId, { supportsAllDrives: true });
 }

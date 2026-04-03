@@ -30,6 +30,7 @@ function finalizeSetup() {
   findOrCreateFolder(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
   findOrCreateFolder(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
   findOrCreateFolder(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
+  findOrCreateFolder(driveId, getFolderName('PATCHES_FOLDER_NAME'));
 
   initializeSheet();
   installTrigger();
@@ -235,17 +236,17 @@ function processLastSummary() {
   var driveId = getSharedDriveId();
   if (!driveId) {
     Logger.log('Not configured. Run setup() first.');
-    return;
+    return { steps: ['Not configured'] };
   }
 
   var lastFile = getLastSummaryFile(driveId);
   if (!lastFile) {
     Logger.log('No summary files found in the transcripts folder.');
-    return;
+    return { steps: ['No summary files found in transcripts folder'] };
   }
 
   Logger.log('Processing last summary: ' + lastFile.fileName);
-  _processMeetingSummary(lastFile.fileId, lastFile.fileName, driveId);
+  return _processMeetingSummary(lastFile.fileId, lastFile.fileName, driveId);
 }
 
 function processLastFeatureDocEdit() {
@@ -289,46 +290,58 @@ function _processStableTranscript(file, driveId) {
 }
 
 function _processMeetingSummary(fileId, fileName, driveId) {
+  var debug = { steps: [], fileName: fileName };
   Logger.log('Processing meeting summary: ' + fileName + ' (' + fileId + ')');
 
   var content;
   try {
     content = readDocContent(fileId);
   } catch (e) {
+    debug.steps.push('ERROR reading summary: ' + e.message);
     Logger.log('ERROR reading summary doc: ' + e.message);
-    return;
+    return debug;
   }
   if (!content.trim()) {
+    debug.steps.push('Document is empty');
     Logger.log('Empty document: ' + fileName);
-    return;
+    return debug;
   }
+  debug.steps.push('Read summary: ' + content.length + ' chars');
 
   var knownFeatures = _getKnownFeaturesWithSummaries(driveId);
   if (!knownFeatures.length) {
-    Logger.log('No known features found. Ensure feature docs are named like "F1 Feature Name" at the drive root.');
-    return;
+    debug.steps.push('No feature docs found in drive root (looking for F<number> prefix)');
+    Logger.log('No known features found.');
+    return debug;
   }
+  debug.steps.push('Found ' + knownFeatures.length + ' feature doc(s): ' + knownFeatures.map(function(f) { return f.id; }).join(', '));
 
   Logger.log('Identifying relevant features from ' + knownFeatures.length + ' known feature(s)...');
   var result = callGeminiForFeatureIdentification(content, knownFeatures);
   var featureIds = result.featureIds || [];
 
   if (!featureIds.length) {
+    debug.steps.push('Gemini found no relevant features in the summary');
+    debug.geminiResponse = result;
     Logger.log('Gemini found no relevant features in summary: ' + fileName);
-    return;
+    return debug;
   }
 
+  debug.steps.push('Gemini identified features: ' + featureIds.join(', '));
   Logger.log('Identified ' + featureIds.length + ' relevant feature(s): ' + featureIds.join(', '));
 
   var approvers = getApproverEmails();
-  if (!approvers.length) {
-    Logger.log('WARNING: No approvers configured.');
-  }
 
   featureIds.forEach(function(featureId) {
     try {
-      _createFeatureDocProposalForFeature(featureId, content, fileName, driveId, approvers);
+      var patchResult = _createFeatureDocProposalForFeature(featureId, content, fileName, fileId, driveId, approvers);
+      if (patchResult && patchResult.patchFile) {
+        debug.steps.push('Created patch for ' + featureId + ': ' + patchResult.patchFile + ' (' + patchResult.operationCount + ' operations)');
+      } else {
+        debug.steps.push(featureId + ': No patch operations generated');
+      }
     } catch (err) {
+      debug.steps.push('ERROR creating patch for ' + featureId + ': ' + err.message);
       Logger.log('Error creating proposal for ' + featureId + ': ' + err.message);
     }
     try {
@@ -337,9 +350,11 @@ function _processMeetingSummary(fileId, fileName, driveId) {
       Logger.log('Error updating technical notes for ' + featureId + ': ' + err.message);
     }
   });
+
+  return debug;
 }
 
-function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName, driveId, approvers) {
+function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName, sourceFileId, driveId, approvers) {
   if (hasActiveProposal(featureId, 'user_story')) {
     Logger.log('Active feature doc proposal already exists for ' + featureId + ', creating new one anyway');
   }
@@ -347,21 +362,85 @@ function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName
   var docInfo = findFeatureDocById(driveId, featureId);
   if (!docInfo) {
     Logger.log('No feature doc found for ' + featureId);
-    return;
+    return { patchFile: null, operationCount: 0 };
   }
-  var featureDocContent = readDocContent(docInfo.fileId);
 
-  var result = callGeminiForUserStoryProposal(summaryContent, featureDocContent, featureId);
-  var proposalId = createUserStoryProposal(featureId, result, fileName);
-  var record = getProposalRecord(proposalId);
+  // Stage A: Extract document structure via Docs API
+  Logger.log('Stage A: Extracting structure from ' + docInfo.fileName);
+  var structure = extractDocStructure(docInfo.fileId);
+  var structuredText = formatStructureForPrompt(structure);
+  var comments = extractDocComments(docInfo.fileId);
 
+  // Stage B: Normalize structure via Gemini
+  Logger.log('Stage B: Normalizing document structure');
+  var normalizedDoc = callGeminiForNormalization(structuredText, featureId, comments);
+  Logger.log('Normalized: ' + (normalizedDoc.sections || []).length + ' sections');
+
+  // Stage C: Generate patch plan via Gemini (with comments as context)
+  Logger.log('Stage C: Generating patch plan');
+  var patchPlan = callGeminiForPatchPlan(normalizedDoc, summaryContent, featureId, comments);
+  var operations = patchPlan.operations || [];
+  Logger.log('Patch plan: ' + operations.length + ' operations, ' + (patchPlan.uncertainties || []).length + ' uncertainties');
+
+  if (!operations.length) {
+    Logger.log('No patch operations generated for ' + featureId + '. Skipping.');
+    return { patchFile: null, operationCount: 0 };
+  }
+
+  // Extract story anchors for scroll-to-story in the extension
+  var storyAnchors = {};
+  try {
+    storyAnchors = extractStoryAnchors(docInfo.fileId);
+    Logger.log('Story anchors: ' + Object.keys(storyAnchors).join(', '));
+  } catch (e) {
+    Logger.log('Could not extract story anchors: ' + e.message);
+  }
+
+  // Save patch file to patches/ folder (reviewed via Chrome extension)
+  var patchData = {
+    featureId: featureId,
+    targetDocId: docInfo.fileId,
+    targetDocName: docInfo.fileName || featureId,
+    targetDocUrl: 'https://docs.google.com/document/d/' + docInfo.fileId + '/edit',
+    sourceFileName: fileName,
+    sourceFileUrl: sourceFileId ? 'https://docs.google.com/document/d/' + sourceFileId + '/edit' : '',
+    createdAt: new Date().toISOString(),
+    storyAnchors: storyAnchors,
+    operations: operations.map(function(op) {
+      op._applied = false;
+      op._dismissed = false;
+      return op;
+    }),
+    uncertainties: patchPlan.uncertainties || [],
+  };
+
+  var dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  var seqKey = 'patch_seq_' + dateStr;
+  var seq = parseInt(getProp(seqKey) || '0', 10) + 1;
+  setProp(seqKey, String(seq));
+  var patchFileName = featureId + '-patch-' + dateStr + '-' + seq + '.json';
+
+  writePatchFile(driveId, patchFileName, patchData);
+  Logger.log('Saved patch file: ' + patchFileName + ' with ' + operations.length + ' operations');
+
+  // Send notification email
   if (approvers.length) {
-    initApprovals(proposalId, approvers, record ? record.docLink : '');
-    var changeSummary = result.changes || [];
-    sendProposalEmail(proposalId, 'user_story', featureId, changeSummary, approvers);
+    var changeSummary = operations.map(function(op) {
+      return {
+        type: op.type,
+        location: op.location || '',
+        original: op.match_text || null,
+        proposed: op.new_text || (op.criterion ? _formatCriterionForDisplay(op.criterion) : op.text) || null,
+        reason: op.reason || '',
+        source: op.source || '',
+      };
+    });
+    var docUrl = 'https://docs.google.com/document/d/' + docInfo.fileId + '/edit';
+    sendPatchNotificationEmail(featureId, patchFileName, changeSummary, approvers, docUrl);
   }
 
-  Logger.log('Created feature doc proposal: ' + proposalId);
+  Logger.log('Created patch for ' + featureId);
+  return { patchFile: patchFileName, operationCount: operations.length };
 }
 
 // ============================================================

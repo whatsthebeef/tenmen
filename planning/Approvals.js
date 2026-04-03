@@ -41,8 +41,15 @@ function applyApprovedFeatureDocProposal(proposalId, record) {
 
   updateProposalStatus(proposalId, 'approved');
 
-  Logger.log('Applying proposal to feature doc...');
-  _applyProposalToFeatureDoc(record.docId, docInfo.fileId);
+  // Read the patch plan from the proposal doc and apply to the live doc
+  Logger.log('Reading patch plan from proposal...');
+  var patchPlan = readPatchPlanFromProposal(record.docId);
+
+  Logger.log('Resolving patch indices against live document...');
+  _resolvePatchIndices(docInfo.fileId, patchPlan);
+
+  Logger.log('Applying ' + (patchPlan.operations || []).length + ' patch operations...');
+  applyPatchPlan(docInfo.fileId, patchPlan);
 
   setProp('last_applied_doc_change_' + featureId, new Date().toISOString());
 
@@ -51,6 +58,101 @@ function applyApprovedFeatureDocProposal(proposalId, record) {
 
   Logger.log('Applied feature document changes for ' + featureId);
   return 'https://docs.google.com/document/d/' + docInfo.fileId + '/edit';
+}
+
+/**
+ * Resolve match_text / after_text in patch operations to actual document indices.
+ * This is needed because the document may have changed since the patch was planned.
+ */
+function _resolvePatchIndices(docId, patchPlan) {
+  var operations = patchPlan.operations || [];
+
+  for (var i = 0; i < operations.length; i++) {
+    var op = operations[i];
+    op._originalType = op.type; // preserve for UI display after resolution
+
+    if (op.type === 'replace_text' && op.match_text) {
+      var found = findTextIndices(docId, op.match_text);
+      if (found) {
+        op.startIndex = found.startIndex;
+        op.endIndex = found.endIndex;
+      } else {
+        Logger.log('WARNING: Could not find match_text for operation ' + i + ': "' + op.match_text.substring(0, 60) + '"');
+        op._skip = true;
+      }
+    } else if (op.type === 'remove_text' && op.match_text) {
+      var found = findTextIndices(docId, op.match_text);
+      if (found) {
+        op.startIndex = found.elementStartIndex;
+        op.endIndex = found.elementEndIndex;
+        op.type = 'delete_range';
+      } else {
+        Logger.log('WARNING: Could not find match_text for removal ' + i + ': "' + op.match_text.substring(0, 60) + '"');
+        op._skip = true;
+      }
+    } else if (op.type === 'insert_after' && op.after_text) {
+      var found = findTextIndices(docId, op.after_text);
+      if (found) {
+        op.targetIndex = found.elementEndIndex;
+        op.text = op.new_text;
+        op.type = 'append_after';
+      } else {
+        Logger.log('WARNING: Could not find after_text for insertion ' + i + ': "' + op.after_text.substring(0, 60) + '"');
+        op._skip = true;
+      }
+    } else if (op.type === 'append_acceptance_criterion' && op.target_story) {
+      // Find the last element of the target story to append after
+      var storyFound = findTextIndices(docId, op.target_story);
+      if (storyFound) {
+        // Find the end of this story's section (next heading or end of doc)
+        var storyEnd = _findStorySectionEnd(docId, storyFound.elementStartIndex);
+        op.targetIndex = storyEnd;
+        op.text = _formatCriterionForDisplay(op.criterion);
+        op.type = 'append_list_item';
+      } else {
+        Logger.log('WARNING: Could not find target story for criterion ' + i + ': "' + op.target_story + '"');
+        op._skip = true;
+      }
+    } else if (op.type === 'add_question') {
+      // Append at end of document
+      var doc = Docs.Documents.get(docId);
+      var lastContent = doc.body.content[doc.body.content.length - 1];
+      op.targetIndex = lastContent.endIndex - 1;
+      op.type = 'append_after';
+      op.text = op.text;
+    }
+  }
+
+  // Remove skipped operations
+  patchPlan.operations = operations.filter(function(op) { return !op._skip; });
+}
+
+/**
+ * Find the end index of a story section (just before the next heading or end of doc).
+ */
+function _findStorySectionEnd(docId, storyStartIndex) {
+  var doc = Docs.Documents.get(docId);
+  var content = doc.body.content || [];
+  var foundStory = false;
+
+  for (var i = 0; i < content.length; i++) {
+    var el = content[i];
+    if (el.startIndex >= storyStartIndex) {
+      foundStory = true;
+    }
+    if (foundStory && el.startIndex > storyStartIndex && el.paragraph) {
+      var style = el.paragraph.paragraphStyle || {};
+      var namedStyle = style.namedStyleType || '';
+      if (namedStyle.indexOf('HEADING') === 0) {
+        // This is the next heading — return the index just before it
+        return el.startIndex - 1;
+      }
+    }
+  }
+
+  // No next heading found — return end of document
+  var last = content[content.length - 1];
+  return last.endIndex - 1;
 }
 
 /**

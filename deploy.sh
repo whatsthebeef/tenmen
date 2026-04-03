@@ -147,8 +147,6 @@ if [ -n "$DEPLOY_ID" ]; then
   URL=$(build_url "$DEPLOY_ID")
   echo ""
   echo "Web app URL: $URL"
-  echo "Opening..."
-  open "$URL" 2>/dev/null || xdg-open "$URL" 2>/dev/null || true
 else
   echo ""
   echo "Done. Could not determine deployment ID."

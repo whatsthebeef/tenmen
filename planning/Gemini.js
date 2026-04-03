@@ -96,12 +96,19 @@ function callGeminiForFeatureDocEdits(currentContent, changeSummary, proposedTex
 }
 
 /**
- * Generate visual diff operations for showing changes in a proposal doc.
- * Returns operations with types: remove, add, replace.
+ * Stage B: Normalize document structure into intermediate representation.
  */
-function callGeminiForFeatureDocVisualDiff(currentContent, changeSummary, featureId) {
-  var prompt = getFeatureDocVisualDiffPrompt(currentContent, changeSummary, featureId);
+function callGeminiForNormalization(structuredDocText, featureId, comments) {
+  var prompt = getNormalizationPrompt(structuredDocText, featureId, comments);
   var raw = callGemini(prompt, 16384);
-  var result = parseGeminiJson(raw);
-  return result.operations || [];
+  return parseGeminiJson(raw);
+}
+
+/**
+ * Stage C: Generate a patch plan from normalized doc + meeting summary.
+ */
+function callGeminiForPatchPlan(normalizedDoc, meetingSummary, featureId, comments) {
+  var prompt = getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments);
+  var raw = callGemini(prompt, 16384);
+  return parseGeminiJson(raw);
 }

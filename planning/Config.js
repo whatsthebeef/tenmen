@@ -9,6 +9,7 @@ var CONFIG_DEFAULTS = {
   PROPOSALS_FOLDER_NAME: 'proposals',
   ARCHIVE_FOLDER_NAME: 'archive',
   TECHNICAL_NOTES_FOLDER_NAME: 'technical_notes',
+  PATCHES_FOLDER_NAME: 'patches',
   DEBOUNCE_MINUTES: '10',
 };
 
@@ -107,6 +108,10 @@ function getProposalsFolderId() {
 
 function getArchiveFolderId() {
   return findFolderByName(getSharedDriveId(), getConfigValue('ARCHIVE_FOLDER_NAME'));
+}
+
+function getPatchesFolderId() {
+  return findFolderByName(getSharedDriveId(), getConfigValue('PATCHES_FOLDER_NAME'));
 }
 
 function getWebAppUrl() {

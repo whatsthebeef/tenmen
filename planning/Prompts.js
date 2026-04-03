@@ -301,47 +301,165 @@ function getFeatureDocEditsPrompt(currentContent, changeSummary, featureId) {
     '\nReturn ONLY valid JSON, no other text.';
 }
 
-function getFeatureDocVisualDiffPrompt(currentContent, changeSummary, featureId) {
-  var changesText = changeSummary.map(function(c, i) { return (i + 1) + '. ' + c; }).join('\n');
+// ============================================================
+// Stage B: Normalize document structure
+// ============================================================
 
-  return 'You are a document diff generator. Given the current document and a list of changes, generate operations that will visually mark up the changes in a copy of the document.' +
-    '\n\nFeature ID: ' + featureId +
-    '\n\nCURRENT DOCUMENT TEXT:' +
+function getNormalizationPrompt(structuredDoc, featureId, comments) {
+  var commentsSection = '';
+  if (comments && comments.length) {
+    commentsSection = '\n\nDOCUMENT COMMENTS (for context only, do not modify these):\n' +
+      comments.map(function(c, i) {
+        return (i + 1) + '. ' + (c.quotedText ? '"' + c.quotedText + '" — ' : '') + c.content;
+      }).join('\n');
+  }
+
+  return 'You are a document structure analyzer. Given the structural extraction of a feature document, normalize it into a clean intermediate representation.\n' +
+    '\nFeature ID: ' + featureId +
+    '\n\nDOCUMENT STRUCTURE:\nEach line shows [type] text {idx:startIndex-endIndex}\n---\n' +
+    structuredDoc +
     '\n---' +
-    '\n' + currentContent +
-    '\n---' +
-    '\n\nCHANGES TO APPLY:' +
-    '\n' + changesText +
-    '\n\nGenerate operations using these types:' +
+    commentsSection +
+    '\n\nNormalize this into the following JSON structure. Classify each part of the document:' +
     '\n' +
-    '\n1. "remove" — Mark existing text for deletion (will be shown as strikethrough in red)' +
-    '\n   { "type": "remove", "find": "exact text to mark as removed" }' +
-    '\n' +
-    '\n2. "add" — Insert new text after a reference point (will be shown in green)' +
-    '\n   { "type": "add", "after": "exact text that comes before the insertion point", "text": "new text to add" }' +
-    '\n' +
-    '\n3. "replace" — Replace existing text (old shown as strikethrough red, new shown in green)' +
-    '\n   { "type": "replace", "find": "exact old text", "replaceWith": "new text" }' +
+    '\n{' +
+    '\n  "title": "document title",' +
+    '\n  "sections": [' +
+    '\n    {' +
+    '\n      "type": "background",' +
+    '\n      "heading": "section heading text",' +
+    '\n      "content": ["paragraph text", "paragraph text"]' +
+    '\n    },' +
+    '\n    {' +
+    '\n      "type": "user_stories",' +
+    '\n      "heading": "section heading text",' +
+    '\n      "stories": [' +
+    '\n        {' +
+    '\n          "id": "' + featureId + 'S1",' +
+    '\n          "story_text": "full user story text",' +
+    '\n          "acceptance_criteria": [' +
+    '\n            {' +
+    '\n              "id": "1.1",' +
+    '\n              "text": "criterion text",' +
+    '\n              "list_items": [' +
+    '\n                { "text": "sub-item", "children": [{ "text": "nested sub-item", "children": [] }] }' +
+    '\n              ]' +
+    '\n            }' +
+    '\n          ],' +
+    '\n          "startIndex": 0,' +
+    '\n          "endIndex": 100' +
+    '\n        }' +
+    '\n      ]' +
+    '\n    },' +
+    '\n    {' +
+    '\n      "type": "questions",' +
+    '\n      "heading": "section heading text",' +
+    '\n      "items": ["question text"]' +
+    '\n    }' +
+    '\n  ],' +
+    '\n  "unclassified_blocks": [' +
+    '\n    { "text": "text that could not be classified", "startIndex": 0, "endIndex": 50 }' +
+    '\n  ]' +
+    '\n}' +
     '\n' +
     '\nRULES:' +
-    '\n- The "find" and "after" values MUST be exact substrings from the current document text' +
-    '\n- Keep operations minimal and precise — target specific phrases, not entire paragraphs' +
-    '\n- NEVER generate a "replace" where "find" and "replaceWith" are identical — that is a no-op' +
-    '\n- Only include operations for text that is actually changing. If text stays the same, do not include it' +
-    '\n- Use "replace" when text is being modified (the old and new text MUST be different)' +
-    '\n- Use "remove" when text is being deleted entirely' +
-    '\n- Use "add" when new text is being inserted' +
-    '\n- For new user stories, use "add" with "after" set to the last line of the preceding section' +
-    '\n- Preserve user story ID prefixes (' + featureId + 'S1, ' + featureId + 'S2, etc.)' +
+    '\n- Preserve the startIndex and endIndex from the source structure for each story — these are needed for patch application' +
+    '\n- acceptance_criteria are NOT nested themselves, but a single criterion MAY contain list_items with nested children' +
+    '\n- If a section does not match background, user_stories, or questions, classify it with type "other"' +
+    '\n- Include all content — nothing should be dropped' +
+    '\n- If content is ambiguous, add it to unclassified_blocks' +
+    '\n- Preserve user story IDs exactly as they appear (e.g. ' + featureId + 'S1, ' + featureId + 'S2)' +
+    '\n' +
+    '\nReturn ONLY valid JSON, no other text.';
+}
+
+// ============================================================
+// Stage C: Generate patch plan
+// ============================================================
+
+function getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments) {
+  var commentsSection = '';
+  if (comments && comments.length) {
+    commentsSection = '\n\nDOCUMENT COMMENTS (existing comments on the live document — use as additional context):\n' +
+      comments.map(function(c, i) {
+        return (i + 1) + '. ' + (c.quotedText ? 'On "' + c.quotedText + '": ' : '') + c.content;
+      }).join('\n');
+  }
+
+  return 'You are a document patch planner. Given a feature document and a meeting summary, generate a patch plan with story-level operations.\n' +
+    '\nFeature ID: ' + featureId +
+    '\n\nCURRENT DOCUMENT:\n---\n' + JSON.stringify(normalizedDoc, null, 2) + '\n---' +
+    '\n\nMEETING SUMMARY:\n---\n' + meetingSummary + '\n---' +
+    commentsSection +
+    '\n\nIMPORTANT: Only extract changes relevant to Feature ' + featureId + '.' +
+    '\n\nEach operation targets ONE user story. There are three operation types:' +
+    '\n' +
+    '\n1. "update" — Modify an existing user story. Provide ONLY the proposedText (the complete updated story as plain text).' +
+    '\n' +
+    '\n2. "create" — Add a new user story. Provide the full proposed story as plain text.' +
+    '\n' +
+    '\n3. "delete" — Remove an entire user story. Just provide the storyId.' +
+    '\n' +
+    '\nField notes:' +
+    '\n- "storyId" is always in the format ' + featureId + 'S<number> (e.g. ' + featureId + 'S1, ' + featureId + 'S2). Even if the document uses a different prefix, use this format for the storyId field.' +
+    '\n- "storyTitle" must be the COMPLETE user story text including the "so they can..." part. Example: "Teacher wants to view a Support Document so they can reference instructional material without confusion about assigning it to students."' +
+    '\n' +
+    '\nDo NOT include "currentText" — the system reads the current text directly from the document.' +
+    '\n' +
+    '\n"proposedText" must be PLAIN TEXT, NOT JSON. Do NOT include JSON fields like "id", "story_text", "acceptance_criteria", "startIndex".' +
+    '\nWrite it exactly as it should appear in the document.' +
+    '\n' +
+    '\nDocument format:' +
+    '\n- Line 1 (H3 heading, bold): Story ID + period + user story text, all on one line. Example: "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials."' +
+    '\n- Line 2: blank line (empty line after the heading)' +
+    '\n- Following lines: acceptance criteria, each on its own line, prefixed with a letter. Example: "A. Editable Support Document versions must allow editing of existing cards"' +
+    '\n- Each acceptance criterion is separated by a blank line.' +
+    '\n- Do NOT include a separate "Acceptance Criteria" heading line — the criteria follow directly after the blank line below the heading.' +
+    '\n' +
+    '\nExample proposedText (note the \\n\\n for blank lines):' +
+    '\n"' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\n\\nA. Editable Support Document versions must allow editing of existing cards\\n\\nB. Editable Support Document versions must not allow adding new cards\\n\\nC. Teachers must not be able to reorder cards"' +
     '\n' +
     '\nReturn JSON:' +
     '\n{' +
     '\n  "operations": [' +
-    '\n    { "type": "replace", "find": "old acceptance criteria text", "replaceWith": "new acceptance criteria text" },' +
-    '\n    { "type": "remove", "find": "text being deleted" },' +
-    '\n    { "type": "add", "after": "text before insertion", "text": "\\nnew content to add" }' +
+    '\n    {' +
+    '\n      "type": "update",' +
+    '\n      "storyId": "' + featureId + 'S2",' +
+    '\n      "storyTitle": "Teacher wants to edit a Support Document version so they can customize instructional materials.",' +
+    '\n      "proposedText": "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\n\\nA. Editable Support Document versions must allow editing of existing cards\\n\\nB. Editable Support Document versions must not allow adding new cards\\n\\nC. Teachers must not be able to reorder cards\\n\\nD. Teachers can delete cards through card details",' +
+    '\n      "reason": "Added acceptance criterion D for card deletion per meeting discussion",' +
+    '\n      "source": "Meeting section on document editing"' +
+    '\n    },' +
+    '\n    {' +
+    '\n      "type": "create",' +
+    '\n      "storyId": "' + featureId + 'S5",' +
+    '\n      "storyTitle": "Teacher wants to export Support Documents so they can share materials outside the system.",' +
+    '\n      "proposedText": "' + featureId + 'S5. Teacher wants to export Support Documents so they can share materials outside the system.\\n\\nA. Teachers can export to PDF format\\n\\nB. Teachers can export to Word format",' +
+    '\n      "reason": "New requirement from meeting",' +
+    '\n      "source": "Meeting section on exports"' +
+    '\n    },' +
+    '\n    {' +
+    '\n      "type": "delete",' +
+    '\n      "storyId": "' + featureId + 'S3",' +
+    '\n      "storyTitle": "Teacher manages legacy formats",' +
+    '\n      "reason": "Feature descoped",' +
+    '\n      "source": "Meeting section on scope"' +
+    '\n    }' +
     '\n  ]' +
     '\n}' +
+    '\n' +
+    '\nRULES:' +
+    '\n- CRITICAL: For unchanged text, copy it CHARACTER FOR CHARACTER from the document. Do NOT change ANY words, even if you think a synonym is better. Do NOT change "visible" to "available", "must" to "should", "button" to "action", or any other synonym substitution. If the original says "Card details must not be visible" then the proposed text MUST say exactly "Card details must not be visible" — not "Card details must not be available" or any variation. The ONLY changes allowed are those directly warranted by the meeting summary.' +
+    '\n- Only include operations for stories that are actually affected by the meeting summary.' +
+    '\n- Do NOT include unchanged stories.' +
+    '\n- RARELY add new stories or delete stories. Most changes are updates to acceptance criteria.' +
+    '\n- LANGUAGE RULES: use succinct declarative language. No meeting references. No justification in criteria. Write as a product spec.' +
+    '\n- Do NOT change story IDs or their format. Use the same ID format that exists in the document, even if it differs from the standard (e.g. keep TF1S2 if that is what the document uses).' +
+    '\n- For new stories, assign the next available ID in the correct format.' +
+    '\n- Acceptance criteria MUST be prefixed with a LETTER (A., B., C., D., etc.), NOT numbers. Never use numbered prefixes like 1.1, 2.3, 3.5 for acceptance criteria.' +
+    '\n' +
+    '\nCONFIDENCE: Be generous with suggestions. If the meeting discussion implies a change even if not explicitly stated, suggest it. The reviewer can always dismiss suggestions they disagree with. It is better to over-suggest than to miss something. Do NOT use "uncertainties" — instead, generate the operation and let the reason explain the confidence level.' +
+    '\n' +
     '\n' +
     '\nReturn ONLY valid JSON, no other text.';
 }

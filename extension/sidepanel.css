@@ -1,0 +1,458 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Google Sans', 'Segoe UI', Arial, sans-serif;
+  font-size: 13px;
+  color: #202124;
+  background: #f8f9fa;
+}
+
+/* Config bar */
+.config-bar {
+  padding: 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.config-bar input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.config-bar label {
+  font-size: 11px;
+  color: #5f6368;
+  display: block;
+  margin-bottom: 4px;
+}
+.config-bar button {
+  margin-top: 6px;
+  padding: 4px 12px;
+  background: #1a73e8;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Status bar — only shown for errors/empty states */
+.status-bar {
+  padding: 8px 12px;
+  background: #e8f0fe;
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 500;
+  display: none;
+}
+.status-bar.error {
+  display: block;
+  background: #fce8e6;
+  color: #c5221f;
+}
+.status-bar.empty {
+  font-size: 14px;
+  padding: 20px 16px;
+  display: block;
+  background: #f1f3f4;
+  color: #5f6368;
+}
+
+/* Section headers */
+.section-header {
+  padding: 12px 12px 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.section-label {
+  font-size: 11px;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.section-link {
+  font-size: 14px;
+  font-family: monospace;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.section-link a {
+  color: #1a73e8;
+  text-decoration: none;
+}
+.section-link a:hover {
+  text-decoration: underline;
+}
+
+/* Feature documents section */
+.feature-docs-section {
+  padding: 12px 12px 12px 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  margin-bottom: 8px;
+}
+.feature-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.feature-doc-link {
+  color: #1a73e8;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.feature-doc-link:hover {
+  text-decoration: underline;
+}
+
+/* Actions panel */
+.actions-panel {
+  padding: 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.action-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  margin-top: 8px;
+  background: #e8f0fe;
+  color: #1a73e8;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.action-btn:hover {
+  background: #d2e3fc;
+}
+.action-btn:disabled {
+  background: #f1f3f4;
+  color: #80868b;
+  cursor: default;
+}
+.debug-output {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #f1f3f4;
+  font-size: 13px;
+  font-weight: 500;
+}
+.debug-dismiss {
+  background: transparent;
+  border: none;
+  color: #5f6368;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.debug-dismiss:hover {
+  background: #e8eaed;
+  border-radius: 4px;
+}
+.debug-steps {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #5f6368;
+  line-height: 1.6;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.debug-step {
+  padding: 2px 0;
+}
+.debug-step.error {
+  color: #c5221f;
+}
+
+/* Settings panel */
+.settings-panel {
+  padding: 12px;
+  background: #fff;
+}
+.settings-field {
+  margin-top: 10px;
+}
+.settings-field label {
+  display: block;
+  font-size: 12px;
+  color: #5f6368;
+  margin-bottom: 3px;
+}
+.settings-field input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: monospace;
+}
+.settings-field input:focus {
+  outline: none;
+  border-color: #1a73e8;
+}
+.settings-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+.settings-cancel {
+  background: #f1f3f4 !important;
+  color: #5f6368 !important;
+}
+.settings-cancel:hover {
+  background: #e8eaed !important;
+}
+.settings-message {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.settings-message.success {
+  background: #e6f4ea;
+  color: #1a7f37;
+}
+.settings-message.error {
+  background: #fce8e6;
+  color: #c5221f;
+}
+
+/* Patch list */
+.patch-list {
+  padding: 8px;
+}
+.patch-footer {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: #5f6368;
+  border-top: 1px solid #e0e0e0;
+  margin-top: 8px;
+}
+
+/* Story card */
+.story-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: visible;
+}
+.story-header {
+  padding: 10px 12px;
+  background: #f1f3f4;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.story-header .story-id {
+  flex-shrink: 0;
+}
+.story-header .story-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.story-header:hover {
+  background: #e8eaed;
+}
+.story-id,
+.story-title {
+  color: #1a73e8;
+  font-family: monospace;
+}
+
+/* Operation */
+.operation {
+  padding: 10px 12px;
+  border-top: 1px solid #f1f3f4;
+}
+.operation.applied {
+  display: none;
+}
+.operation.sliding-out {
+  animation: slideOut 0.3s ease-out forwards;
+}
+@keyframes slideOut {
+  to {
+    opacity: 0;
+    max-height: 0;
+    padding: 0 12px;
+    margin: 0;
+    overflow: hidden;
+  }
+}
+.operation.dismissed {
+  opacity: 0.3;
+  background: #f1f3f4;
+}
+.op-diff {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+  word-break: break-word;
+  position: relative;
+}
+.op-diff[data-reason] {
+  cursor: help;
+}
+.op-diff[data-reason]:hover::after {
+  content: attr(data-reason);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  background: #333;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 280px;
+  white-space: normal;
+  z-index: 1000;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  animation: fadeIn 0.2s 0.5s forwards;
+}
+@keyframes fadeIn {
+  to { opacity: 1; }
+}
+.diff-del {
+  color: #cf222e;
+  text-decoration: line-through;
+  background: #fce8e6;
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+.diff-add {
+  color: #1a7f37;
+  background: #e6f4ea;
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+.diff-line {
+  color: #202124;
+  padding: 1px 2px;
+}
+.op-diff:not(.editing) {
+  cursor: text;
+}
+.op-edit-textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #1a73e8;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+.op-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.op-edit-done {
+  padding: 4px 12px;
+  background: #e8f0fe;
+  color: #1a73e8;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.op-edit-done:hover { background: #d2e3fc; }
+.op-edit-cancel {
+  padding: 4px 12px;
+  background: transparent;
+  color: #5f6368;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.op-edit-cancel:hover { background: #f1f3f4; }
+.op-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.op-actions button {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn-apply {
+  background: #e8f0fe;
+  color: #1a73e8;
+}
+.btn-apply:hover { background: #d2e3fc; }
+.btn-apply:disabled { background: #f8f9fa; color: #dadce0; cursor: default; }
+.btn-dismiss {
+  background: transparent;
+  color: #5f6368;
+  font-size: 12px;
+}
+.btn-dismiss:hover { background: #f1f3f4; }
+.btn-dismiss:disabled { background: transparent; color: #dadce0; cursor: default; }
+
+.op-status {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.op-status.applied { color: #1a7f37; }
+.op-status.dismissed { color: #5f6368; }
+.op-status.error { color: #c5221f; }
+.op-status.not-found {
+  color: #1a73e8;
+  font-size: 14px;
+  padding-left: 0;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 40px 12px;
+  color: #5f6368;
+  font-size: 14px;
+}
+
+/* All done */
+.all-done {
+  text-align: center;
+  padding: 40px 12px;
+  color: #1a7f37;
+  font-weight: 500;
+}
