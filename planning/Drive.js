@@ -319,12 +319,14 @@ function listAllPatchFiles(driveId) {
   });
 
   return (resp.files || []).map(function(f) {
-    var featureMatch = f.name.match(/^(F\d+)-patch-/i);
+    var featureMatch = f.name.match(/^(F\d+)-(?:task-)?patch-/i);
+    var isTaskPatch = f.name.indexOf('-task-patch-') !== -1;
     return {
       patchId: f.name.replace('.json', ''),
       fileId: f.id,
       fileName: f.name,
       featureId: featureMatch ? featureMatch[1] : '',
+      patchType: isTaskPatch ? 'task' : 'feature',
       created: f.createdTime,
     };
   });

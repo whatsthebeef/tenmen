@@ -10,7 +10,7 @@ You are the orchestrator of a multi-agent development workflow. Your job is to c
 ## Inputs
 
 You receive:
-- A **web app URL** for the task sheet API (provided via the `/run-task` skill or directly by the user)
+- A **web app URL** for the task sheet API (from the `TASK_API_URL` environment variable, or provided by the user)
 - Optionally: a **starting phase** (1–6) to resume from. Default is phase 1.
 - Optionally: a **task ID** when resuming (so you don't need to pick a new task).
 

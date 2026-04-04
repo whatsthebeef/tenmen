@@ -250,8 +250,8 @@ function applyStoryUpdate(docId, storyId, proposedText) {
     throw new Error('Story ' + storyId + ' not found in document');
   }
 
-  // Ensure trailing blank line (two newlines) for separation from next story
-  var insertText = proposedText.replace(/\n+$/, '') + '\n\n';
+  // Normalize spacing: blank line after heading, between each criterion, and trailing
+  var insertText = _normalizeStorySpacing(proposedText);
   var requests = [
     { deleteContentRange: { range: { startIndex: section.startIndex, endIndex: section.endIndex } } },
     { insertText: { location: { index: section.startIndex }, text: insertText } },
@@ -273,7 +273,7 @@ function applyStoryCreate(docId, proposedText) {
   var lastEl = doc.body.content[doc.body.content.length - 1];
   var endIndex = lastEl.endIndex - 1;
 
-  var insertText = '\n' + proposedText + '\n';
+  var insertText = '\n' + _normalizeStorySpacing(proposedText);
   var requests = [
     { insertText: { location: { index: endIndex }, text: insertText } },
   ];
@@ -308,6 +308,40 @@ function applyStoryDelete(docId, storyId) {
  * First paragraph (the heading) → HEADING_3
  * All subsequent paragraphs → NORMAL_TEXT
  */
+/**
+ * Normalize story text spacing:
+ * - Blank line after the heading (first line)
+ * - Blank line between each acceptance criterion (lines starting with a letter + period)
+ * - Trailing blank line for separation from next story
+ */
+function _normalizeStorySpacing(text) {
+  var lines = text.replace(/\r\n/g, '\n').split('\n');
+  var result = [];
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var nextLine = i + 1 < lines.length ? lines[i + 1] : null;
+
+    result.push(line);
+
+    // Don't add extra blank line if next line is already blank
+    if (nextLine !== null && nextLine.trim() === '') continue;
+
+    // After first line (heading): add blank line
+    if (i === 0 && nextLine !== null) {
+      result.push('');
+    }
+    // After each criterion line (starts with A-Z + period): add blank line before next criterion
+    else if (/^[A-Z]\.\s/.test(line) && nextLine !== null && nextLine.trim() !== '') {
+      result.push('');
+    }
+  }
+
+  // Ensure trailing blank line
+  var joined = result.join('\n').replace(/\n+$/, '');
+  return joined + '\n\n';
+}
+
 function _fixStoryParagraphStyles(docId, insertStartIndex, insertedText) {
   // Re-read the doc to get current paragraph boundaries
   var doc = Docs.Documents.get(docId);

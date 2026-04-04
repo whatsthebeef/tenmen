@@ -139,10 +139,9 @@ TASK FORMAT:
 - "id": The task ID (e.g. ${featureId}S1T1). For creates, generate the next available ID. For updates and deletes, use the existing ID.
 - "summary": The user story summary. Format: "<Role> wants to <perform some function>". If the task is a split, append a qualifier: "<Role> wants to <function> — <specific part>".
 - "description": The full user story: "<Role> wants to <function> so they can <goal>".
-- "acceptance_criteria": The acceptance criteria for this task as a list. Include:
-  1. Acceptance Criteria explicitly stated in the feature document that are relevant to this task
-  2. Inferred Acceptance Criteria not explicitly stated but relevant (prefix with "[Inferred]")
+- "acceptance_criteria": Copy the acceptance criteria VERBATIM from the feature document, including the letter prefix (A., B., C., etc.). Do NOT rephrase, renumber, or reformat them. Each criterion should be copied exactly as written in the feature document.
 - "notes": Technical implementation notes. Pull relevant notes from the Technical Notes document above. Match by task ID first, then scan the General section for relevant items. Include software design decisions, architecture notes, environment setup, refactoring plans. Leave empty if none relevant.
+- "reason": A specific explanation of what changed and why. For updates, list exactly which fields changed and what the change was (e.g. "Added criterion C for card deletion. Changed summary to include 'so they can customize materials'."). Be specific, not generic.
 
 IMPORTANT: Write all IDs without spaces — "${featureId}S1T1" not "${featureId} S1 T1".
 
@@ -154,13 +153,13 @@ Return your response as JSON with this exact structure:
     { "type": "removed", "taskId": "${featureId}S2T1", "summary": "Developer wants to build legacy adapter", "reason": "Feature descoped" }
   ],
   "updates": [
-    { "id": "${featureId}S1T1", "summary": "Teacher wants to edit support documents", "description": "Teacher wants to edit support documents in the system so they can customize instructional materials.", "acceptance_criteria": ["Teacher can open a document in edit mode", "Changes are saved automatically", "[Inferred] Teacher sees a confirmation when changes are saved"], "notes": "Refactor editor component to use collaborative editing API" }
+    { "id": "${featureId}S1T1", "summary": "Teacher wants to edit support documents", "description": "Teacher wants to edit support documents in the system so they can customize instructional materials.", "acceptance_criteria": ["A. Teacher can open a document in edit mode", "B. Changes are saved automatically"], "notes": "Refactor editor component to use collaborative editing API", "reason": "Added criterion B for auto-save. Summary unchanged." }
   ],
   "creates": [
-    { "id": "${featureId}S3T1", "summary": "Teacher wants to view support documents", "description": "Teacher wants to view support documents in the system so they can reference instructional materials.", "acceptance_criteria": ["Teacher can browse available documents", "Documents render in a readable format", "[Inferred] Teacher can search within documents"], "notes": "Use existing document viewer component" }
+    { "id": "${featureId}S3T1", "summary": "Teacher wants to view support documents", "description": "Teacher wants to view support documents in the system so they can reference instructional materials.", "acceptance_criteria": ["A. Teacher can browse available documents", "B. Documents render in a readable format"], "notes": "Use existing document viewer component", "reason": "New task for user story S3 added to feature document." }
   ],
   "deletes": [
-    { "id": "${featureId}S2T1", "summary": "Developer wants to build legacy adapter" }
+    { "id": "${featureId}S2T1", "summary": "Developer wants to build legacy adapter", "reason": "User story S2 removed from feature document." }
   ]
 }
 

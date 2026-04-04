@@ -9,8 +9,8 @@ set -euo pipefail
 # Usage: ./merge-into-repo.sh /path/to/target-repo
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SOURCE_CLAUDE="$SCRIPT_DIR/.claude"
-SOURCE_CLAUDEMD="$SCRIPT_DIR/CLAUDE.md"
+SOURCE_CLAUDE="$SCRIPT_DIR/implementation/.claude"
+SOURCE_CLAUDEMD="$SCRIPT_DIR/implementation/CLAUDE.md"
 
 TARGET="${1:?Usage: $0 /path/to/target-repo}"
 TARGET_CLAUDE="$TARGET/.claude"
@@ -48,6 +48,12 @@ with open('$SOURCE_SETTINGS') as f:
     src = json.load(f)
 with open('$TARGET_SETTINGS') as f:
     tgt = json.load(f)
+
+# Merge env (source wins on conflict)
+tgt.setdefault('env', {})
+for k, v in src.get('env', {}).items():
+    tgt['env'][k] = v
+    print(f'  Set env: {k}')
 
 # Merge mcpServers (source wins on conflict)
 tgt.setdefault('mcpServers', {})

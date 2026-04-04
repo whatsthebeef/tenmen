@@ -568,20 +568,82 @@ function _processStableFeatureDoc(file, driveId) {
   }
 
   var result = callGeminiForTaskProposal(content, currentTasks, featureId, technicalNotes);
-  var proposalId = createTaskProposal(featureId, result, file.fileName);
-  var record = getProposalRecord(proposalId);
 
-  var approvers = getApproverEmails();
-  if (approvers.length) {
-    initApprovals(proposalId, approvers, record ? record.docLink : '');
-    var changeSummary = (result.changeSummary || []).map(function(c) {
-      var ref = c.taskId ? ' (' + c.taskId + ')' : '';
-      return c.type.toUpperCase() + ': ' + (c.summary || c.name || '') + ref + ' — ' + (c.reason || '');
-    });
-    sendProposalEmail(proposalId, 'tasks', featureId, changeSummary, approvers);
+  // Build a reason lookup from changeSummary (fallback if operation has no reason)
+  var reasonMap = {};
+  (result.changeSummary || []).forEach(function(c) {
+    if (c.taskId) reasonMap[c.taskId] = c.reason || '';
+  });
+
+  // Collect all task operations into a flat list
+  var operations = [];
+  (result.updates || []).forEach(function(t) {
+    t.type = 'update';
+    t.reason = t.reason || reasonMap[t.id] || '';
+    t._applied = false;
+    t._dismissed = false;
+    operations.push(t);
+  });
+  (result.creates || []).forEach(function(t) {
+    t.type = 'create';
+    t.reason = t.reason || reasonMap[t.id] || '';
+    t._applied = false;
+    t._dismissed = false;
+    operations.push(t);
+  });
+  (result.deletes || []).forEach(function(t) {
+    t.type = 'delete';
+    t.reason = t.reason || reasonMap[t.id] || '';
+    t._applied = false;
+    t._dismissed = false;
+    operations.push(t);
+  });
+
+  if (!operations.length) {
+    Logger.log('No task operations generated for ' + featureId);
+    return;
   }
 
-  Logger.log('Created task proposal: ' + proposalId);
+  // Save task patch file
+  var ssId = getSpreadsheetId();
+  var taskPatchData = {
+    patchType: 'task',
+    featureId: featureId,
+    targetSpreadsheetId: ssId,
+    targetSpreadsheetUrl: ssId ? 'https://docs.google.com/spreadsheets/d/' + ssId + '/edit' : '',
+    sourceFileName: file.fileName,
+    sourceFileUrl: 'https://docs.google.com/document/d/' + file.fileId + '/edit',
+    createdAt: new Date().toISOString(),
+    operations: operations,
+  };
+
+  var dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  var seqKey = 'task_patch_seq_' + dateStr;
+  var seq = parseInt(getProp(seqKey) || '0', 10) + 1;
+  setProp(seqKey, String(seq));
+  var patchFileName = featureId + '-task-patch-' + dateStr + '-' + seq + '.json';
+
+  writePatchFile(driveId, patchFileName, taskPatchData);
+  Logger.log('Saved task patch file: ' + patchFileName + ' with ' + operations.length + ' operations');
+
+  // Notify approvers
+  var approvers = getApproverEmails();
+  if (approvers.length) {
+    var changeSummary = operations.map(function(op) {
+      return {
+        type: op.type,
+        location: op.id || '',
+        original: null,
+        proposed: op.summary || '',
+        reason: op.reason || '',
+        source: '',
+      };
+    });
+    var docUrl = ssId ? 'https://docs.google.com/spreadsheets/d/' + ssId + '/edit' : '';
+    sendPatchNotificationEmail(featureId, patchFileName, changeSummary, approvers, docUrl);
+  }
+
+  Logger.log('Created task patch for ' + featureId);
 }
 
 // ============================================================

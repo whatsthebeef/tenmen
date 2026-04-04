@@ -30,8 +30,8 @@ Pick up and execute the next available task, or resume a task from a specific ph
 You are invoking the orchestrator workflow. Follow these steps:
 
 1. **Resolve the web app URL**
-   - Check `.claude/memory/` for a saved `task_api_url`.
-   - If not found, ask the user for the web app URL and save it to memory.
+   - Read from the `TASK_API_URL` environment variable.
+   - If not set, ask the user for the web app URL.
 
 2. **Parse arguments**
    - Extract `--from` phase number (default: 1).

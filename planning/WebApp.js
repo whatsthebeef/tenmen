@@ -29,6 +29,12 @@ function doGet(e) {
   if (action === 'get_story_text') {
     return _handleGetStoryText(e);
   }
+  if (action === 'get_task_data') {
+    return _handleGetTaskData(e);
+  }
+  if (action === 'get_task_row') {
+    return _handleGetTaskRow(e);
+  }
 
   // Proposal actions (need proposalId)
   var proposalId = e.parameter.proposalId;
@@ -319,7 +325,7 @@ function _handleGetPatch(e) {
   }
   var driveId = getSharedDriveId();
   // Find the patch file by patchId (filename without .json)
-  var featureId = patchId.split('-patch-')[0];
+  var featureId = patchId.match(/^(F\d+)/i) ? patchId.match(/^(F\d+)/i)[1] : patchId.split('-')[0];
   var patches = listPatchFiles(driveId, featureId);
   var match = patches.filter(function(p) { return p.patchId === patchId; })[0];
   if (!match) {
@@ -336,7 +342,7 @@ function _handleApplyOperation(patchId, operationIndex) {
 
   try {
     var driveId = getSharedDriveId();
-    var featureId = patchId.split('-patch-')[0];
+    var featureId = patchId.match(/^(F\d+)/i) ? patchId.match(/^(F\d+)/i)[1] : patchId.split('-')[0];
     var patches = listPatchFiles(driveId, featureId);
     var match = patches.filter(function(p) { return p.patchId === patchId; })[0];
     if (!match) {
@@ -355,23 +361,26 @@ function _handleApplyOperation(patchId, operationIndex) {
       return _jsonResponse({ error: 'Operation already resolved' });
     }
 
-    var targetDocId = patchContent.targetDocId;
-
-    // Apply story-level operation
-    if (op.type === 'update') {
-      applyStoryUpdate(targetDocId, op.storyId, op.proposedText);
-    } else if (op.type === 'create') {
-      applyStoryCreate(targetDocId, op.proposedText);
-    } else if (op.type === 'delete') {
-      applyStoryDelete(targetDocId, op.storyId);
+    if (patchContent.patchType === 'task') {
+      // Task patch — apply to spreadsheet
+      _applyTaskPatchOperation(op);
     } else {
-      // Legacy operation — use old resolution path
-      var singlePlan = { operations: [op] };
-      _resolvePatchIndices(targetDocId, singlePlan);
-      if (!singlePlan.operations.length) {
-        return _jsonResponse({ error: 'Could not apply — text not found in document' });
+      // Feature doc patch — apply to Google Doc
+      var targetDocId = patchContent.targetDocId;
+      if (op.type === 'update') {
+        applyStoryUpdate(targetDocId, op.storyId, op.proposedText);
+      } else if (op.type === 'create') {
+        applyStoryCreate(targetDocId, op.proposedText);
+      } else if (op.type === 'delete') {
+        applyStoryDelete(targetDocId, op.storyId);
+      } else {
+        var singlePlan = { operations: [op] };
+        _resolvePatchIndices(targetDocId, singlePlan);
+        if (!singlePlan.operations.length) {
+          return _jsonResponse({ error: 'Could not apply — text not found in document' });
+        }
+        applyPatchPlan(targetDocId, singlePlan);
       }
-      applyPatchPlan(targetDocId, singlePlan);
     }
 
     // Mark as applied and save back
@@ -391,7 +400,7 @@ function _handleApplyOperation(patchId, operationIndex) {
 
 function _handleDismissOperation(patchId, operationIndex) {
   var driveId = getSharedDriveId();
-  var featureId = patchId.split('-patch-')[0];
+  var featureId = patchId.match(/^(F\d+)/i) ? patchId.match(/^(F\d+)/i)[1] : patchId.split('-')[0];
   var patches = listPatchFiles(driveId, featureId);
   var match = patches.filter(function(p) { return p.patchId === patchId; })[0];
   if (!match) {
@@ -413,6 +422,68 @@ function _handleDismissOperation(patchId, operationIndex) {
   }
 
   return _jsonResponse({ success: true, operationIndex: operationIndex });
+}
+
+function _handleGetTaskData(e) {
+  var taskId = e.parameter.taskId;
+  if (!taskId) {
+    return _jsonResponse({ error: 'Missing taskId' });
+  }
+  var task = getTaskById(taskId);
+  if (!task) {
+    return _jsonResponse({ error: 'Task not found: ' + taskId, task: null });
+  }
+  return _jsonResponse({ task: task });
+}
+
+function _handleGetTaskRow(e) {
+  var taskId = e.parameter.taskId;
+  if (!taskId) return _jsonResponse({ error: 'Missing taskId' });
+
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(MAIN_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return _jsonResponse({ error: 'No tasks', row: null });
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === taskId) {
+      return _jsonResponse({
+        row: i + 2,
+        sheetId: sheet.getSheetId(),
+        spreadsheetId: ss.getId(),
+      });
+    }
+  }
+  return _jsonResponse({ error: 'Task not found', row: null });
+}
+
+function _applyTaskPatchOperation(op) {
+  var today = new Date().toISOString().split('T')[0];
+
+  if (op.type === 'create') {
+    addTask({
+      id: op.id || '',
+      name: op.summary || '',
+      description: op.description || '',
+      acceptance_criteria: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || ''),
+      notes: op.notes || '',
+      status: 'To Do',
+      sourceDoc: '',
+      dateCreated: today,
+    });
+    Logger.log('Task patch: created ' + op.id);
+  } else if (op.type === 'update') {
+    updateTask(op.id, {
+      name: op.summary,
+      description: op.description,
+      acceptance_criteria: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || ''),
+      notes: op.notes,
+    });
+    Logger.log('Task patch: updated ' + op.id);
+  } else if (op.type === 'delete') {
+    deleteTask(op.id);
+    Logger.log('Task patch: deleted ' + op.id);
+  }
 }
 
 function _allOperationsResolved(operations) {

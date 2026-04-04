@@ -198,9 +198,11 @@ function detectFeatureDoc() {
     if (!tabs.length) return;
     var tab = tabs[0];
 
-    // Detect current feature ID from tab title
+    // Detect current context
     var match = (tab.title || '').match(/^F(\d+)\s+/i);
     state.featureId = match ? 'F' + match[1] : null;
+    state.onSpreadsheet = (tab.title || '').indexOf('Tenmen Tasks') !== -1 ||
+      ((tab.url || '').indexOf('spreadsheets') !== -1 && (tab.title || '').indexOf('Tenmen') !== -1);
 
     fetchAllPatches();
   });
@@ -250,6 +252,11 @@ function fetchAllPatches() {
     return;
   }
 
+  // Show loading on first fetch
+  if (!state.hasFetchedOnce) {
+    document.getElementById('loading').style.display = 'block';
+  }
+
   document.getElementById('patch-list').innerHTML = '';
   document.getElementById('all-done').style.display = 'none';
   document.getElementById('source-section').style.display = 'none';
@@ -259,6 +266,8 @@ function fetchAllPatches() {
   var url = state.webAppUrl + '?action=list_patches';
   apiGet(url, function(response) {
     state.fetching = false;
+    state.hasFetchedOnce = true;
+    document.getElementById('loading').style.display = 'none';
     _resetReloadBtn();
     if (state.showingSettings) return;
 
@@ -287,6 +296,15 @@ function fetchAllPatches() {
       return p.patchId.replace(/^F\d+-/, '') === oldestDateSeq;
     });
 
+    // Show loading if we're likely on a matching page
+    var mightMatch = state.patchGroup.some(function(p) {
+      return (state.featureId && p.featureId === state.featureId) || state.onSpreadsheet;
+    });
+    if (mightMatch) {
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('actions-panel').style.display = 'none';
+    }
+
     // Load each patch in the group to get full data
     state.loadedPatches = {};
     var toLoad = state.patchGroup.length;
@@ -296,6 +314,7 @@ function fetchAllPatches() {
       loadPatch(patchInfo, function() {
         loaded++;
         if (loaded === toLoad) {
+          document.getElementById('loading').style.display = 'none';
           renderPatchGroup();
         }
       });
@@ -337,14 +356,17 @@ function renderPatchGroup() {
     return;
   }
 
-  // Check if current page is one of the addressed feature docs
+  // Check if current page is one of the addressed feature docs (only match feature doc patches, not task patches)
   var currentPatchData = null;
   var currentPatchInfo = null;
   if (state.featureId) {
     state.patchGroup.forEach(function(p) {
       if (p.featureId === state.featureId && state.loadedPatches[p.patchId]) {
-        currentPatchData = state.loadedPatches[p.patchId].data;
-        currentPatchInfo = state.loadedPatches[p.patchId].info;
+        var loaded = state.loadedPatches[p.patchId];
+        if (loaded.data.patchType !== 'task') {
+          currentPatchData = loaded.data;
+          currentPatchInfo = loaded.info;
+        }
       }
     });
   }
@@ -354,8 +376,23 @@ function renderPatchGroup() {
   var featureDocsList = document.getElementById('feature-docs-list');
   featureDocsList.innerHTML = '';
 
+  // Also check for task patches when on the spreadsheet
+  var currentTaskPatchData = null;
+  var currentTaskPatchInfo = null;
+  if (state.onSpreadsheet) {
+    state.patchGroup.forEach(function(p) {
+      var loaded = state.loadedPatches[p.patchId];
+      if (loaded && loaded.data.patchType === 'task') {
+        currentTaskPatchData = loaded.data;
+        currentTaskPatchInfo = loaded.info;
+      }
+    });
+  }
+
   if (currentPatchData) {
-    // On the feature doc — show full header with source + feature doc links
+    // On the feature doc — show feature doc patch
+    var sourceLabel = document.querySelector('#source-section .section-label');
+    if (sourceLabel) sourceLabel.textContent = 'Meeting Summary';
     var sourceHeader = document.getElementById('source-header');
     var sourceName = firstPatch.data.sourceFileName || '';
     if (sourceName) {
@@ -367,12 +404,29 @@ function renderPatchGroup() {
       sourceSection.style.display = 'block';
     }
     featureDocsSection.style.display = 'none';
-
     document.getElementById('actions-panel').style.display = 'none';
     state.currentPatch = currentPatchData;
     renderPatch(currentPatchInfo, currentPatchData);
+  } else if (currentTaskPatchData) {
+    // On the spreadsheet — show task patch with feature doc as source
+    var sourceLabel = document.querySelector('#source-section .section-label');
+    if (sourceLabel) sourceLabel.textContent = 'Feature Document';
+    var sourceHeader2 = document.getElementById('source-header');
+    var sourceName2 = currentTaskPatchData.sourceFileName || '';
+    if (sourceName2) {
+      if (currentTaskPatchData.sourceFileUrl) {
+        sourceHeader2.innerHTML = '<a href="' + escapeHtml(currentTaskPatchData.sourceFileUrl) + '" target="_blank">' + escapeHtml(sourceName2) + '</a>';
+      } else {
+        sourceHeader2.textContent = sourceName2;
+      }
+      sourceSection.style.display = 'block';
+    }
+    featureDocsSection.style.display = 'none';
+    document.getElementById('actions-panel').style.display = 'none';
+    state.currentPatch = currentTaskPatchData;
+    renderTaskPatch(currentTaskPatchInfo, currentTaskPatchData);
   } else {
-    // Not on the feature doc — just show the feature doc link at the top
+    // Not on a matching page — show links
     sourceSection.style.display = 'none';
 
     featureIds.forEach(function(fId) {
@@ -383,12 +437,16 @@ function renderPatchGroup() {
         }
       });
 
-      if (loaded && loaded.data.targetDocUrl) {
+      // Show link to feature doc or spreadsheet depending on patch type
+      var targetUrl = loaded ? (loaded.data.targetDocUrl || loaded.data.targetSpreadsheetUrl) : '';
+      var targetName = loaded ? (loaded.data.targetDocName || 'Tenmen Tasks') : '';
+
+      if (loaded && targetUrl) {
         var link = document.createElement('a');
         link.className = 'feature-doc-link';
-        link.href = loaded.data.targetDocUrl;
+        link.href = targetUrl;
         link.target = '_blank';
-        link.textContent = loaded.data.targetDocName || fId;
+        link.textContent = targetName;
         featureDocsList.appendChild(link);
       }
     });
@@ -493,6 +551,160 @@ function renderPatch(patchInfo, patchData) {
 
   checkAllDone(operations);
 }
+
+// ============================================================
+// Task patch rendering
+// ============================================================
+
+function renderTaskPatch(patchInfo, patchData) {
+  var container = document.getElementById('patch-list');
+  container.innerHTML = '';
+  state.currentPatch = patchData;
+
+  var operations = patchData.operations || [];
+
+  operations.forEach(function(op, index) {
+    if (op._applied || op._dismissed) return;
+    container.appendChild(renderTaskOperation(op, index, patchInfo.patchId));
+  });
+
+  checkAllDone(operations);
+}
+
+function renderTaskOperation(op, index, patchId) {
+  var div = document.createElement('div');
+  div.className = 'operation task-operation';
+  div.id = 'op-' + index;
+
+  // Header with task ID (clickable to scroll in sheet) and type badge
+  var header = document.createElement('div');
+  header.className = 'task-op-header';
+  var typeBadge = op.type === 'create' ? 'new' : op.type === 'delete' ? 'remove' : 'update';
+  var idSpan = document.createElement('span');
+  idSpan.className = 'story-id';
+  idSpan.textContent = op.id || '';
+  header.appendChild(idSpan);
+
+  var badgeSpan = document.createElement('span');
+  badgeSpan.className = 'task-type-badge task-type-' + typeBadge;
+  badgeSpan.textContent = typeBadge;
+  header.appendChild(badgeSpan);
+
+  if (op.reason) {
+    var reasonIcon = document.createElement('span');
+    reasonIcon.className = 'task-reason-icon';
+    reasonIcon.textContent = 'i';
+    reasonIcon.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#e8eaed;color:#5f6368;font-size:11px;font-weight:600;cursor:help;position:relative;margin-left:auto;flex-shrink:0;';
+    var tooltip = document.createElement('div');
+    tooltip.style.cssText = 'display:none;position:absolute;right:0;top:24px;background:#333;color:#fff;padding:6px 10px;border-radius:4px;font-size:12px;font-weight:400;max-width:280px;white-space:normal;z-index:1000;line-height:1.4;';
+    tooltip.textContent = op.reason;
+    reasonIcon.appendChild(tooltip);
+    reasonIcon.addEventListener('mouseenter', function() { tooltip.style.display = 'block'; });
+    reasonIcon.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
+    header.appendChild(reasonIcon);
+  }
+  if (op.id && op.type !== 'create') {
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', (function(taskId) {
+      return function() { scrollToTask(taskId); };
+    })(op.id));
+  }
+  div.appendChild(header);
+
+  // Fields
+  var fields = [
+    { label: 'Summary', key: 'summary', proposed: op.summary },
+    { label: 'Description', key: 'description', proposed: op.description },
+    { label: 'Acceptance Criteria', key: 'acceptance_criteria', proposed: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || '') },
+    { label: 'Notes', key: 'notes', proposed: op.notes },
+  ];
+
+  if (op.type === 'delete') {
+    // For deletes, just show the summary in red
+    var delDiv = document.createElement('div');
+    delDiv.className = 'task-field';
+    delDiv.innerHTML = '<div class="task-field-label">Summary</div>' +
+      '<div class="diff-del">' + escapeHtml(op.summary || op.id) + '</div>';
+    div.appendChild(delDiv);
+  } else if (op.type === 'update') {
+    // For updates, fetch live data and show diff per field
+    var fieldsContainer = document.createElement('div');
+    fieldsContainer.className = 'task-fields';
+    fieldsContainer.innerHTML = '<span style="color:#5f6368;">Loading...</span>';
+    div.appendChild(fieldsContainer);
+
+    var url = state.webAppUrl + '?action=get_task_data&taskId=' + encodeURIComponent(op.id);
+    apiGet(url, function(response) {
+      fieldsContainer.innerHTML = '';
+      var liveTask = (response && response.ok && response.data) ? response.data.task : null;
+
+      fields.forEach(function(f) {
+        var liveVal = liveTask ? (liveTask[f.key] || '') : '';
+        var proposedVal = f.proposed || '';
+        if (!liveVal && !proposedVal) return;
+
+        var fieldDiv = document.createElement('div');
+        fieldDiv.className = 'task-field';
+        fieldDiv.innerHTML = '<div class="task-field-label">' + escapeHtml(f.label) + '</div>';
+
+        var valueDiv = document.createElement('div');
+        if (liveVal === proposedVal || !liveTask) {
+          valueDiv.className = 'task-field-value';
+          valueDiv.textContent = proposedVal;
+        } else {
+          valueDiv.className = 'task-field-diff';
+          valueDiv.innerHTML = buildLineDiff(liveVal, proposedVal);
+        }
+        _makeTaskFieldEditable(valueDiv, op, f.key, f.proposed, liveVal);
+        fieldDiv.appendChild(valueDiv);
+        fieldsContainer.appendChild(fieldDiv);
+      });
+
+      if (!fieldsContainer.children.length) {
+        fieldsContainer.innerHTML = '<div class="task-field"><div class="task-field-value" style="color:#5f6368;">No changes</div></div>';
+      }
+    });
+  } else {
+    // For creates, show all fields in green (editable)
+    fields.forEach(function(f) {
+      if (!f.proposed) return;
+      var fieldDiv = document.createElement('div');
+      fieldDiv.className = 'task-field';
+      fieldDiv.innerHTML = '<div class="task-field-label">' + escapeHtml(f.label) + '</div>';
+      var valueDiv = document.createElement('div');
+      valueDiv.className = 'diff-add';
+      valueDiv.textContent = f.proposed;
+      _makeTaskFieldEditable(valueDiv, op, f.key, f.proposed, '');
+      fieldDiv.appendChild(valueDiv);
+      div.appendChild(fieldDiv);
+    });
+  }
+
+  // Action buttons
+  var actionsDiv = document.createElement('div');
+  actionsDiv.className = 'op-actions';
+  var applyBtn = document.createElement('button');
+  applyBtn.className = 'btn-apply';
+  applyBtn.textContent = 'Apply';
+  applyBtn.addEventListener('click', function() {
+    applyOperation(patchId, index, div, applyBtn, op);
+  });
+  var dismissBtn = document.createElement('button');
+  dismissBtn.className = 'btn-dismiss';
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.addEventListener('click', function() {
+    dismissOperation(patchId, index, div, dismissBtn);
+  });
+  actionsDiv.appendChild(applyBtn);
+  actionsDiv.appendChild(dismissBtn);
+  div.appendChild(actionsDiv);
+
+  return div;
+}
+
+// ============================================================
+// Feature doc patch rendering
+// ============================================================
 
 function renderOperation(op, index, patchId) {
   var div = document.createElement('div');
@@ -658,6 +870,9 @@ function buildDiffHtml(op) {
 function applyOperation(patchId, operationIndex, opDiv, btn, op) {
   btn.disabled = true;
   btn.textContent = 'Applying...';
+  // Disable dismiss button while applying
+  var dismissBtn = opDiv.querySelector('.btn-dismiss');
+  if (dismissBtn) dismissBtn.disabled = true;
 
   apiPost(state.webAppUrl, {
     action: 'apply_operation',
@@ -707,6 +922,30 @@ function dismissOperation(patchId, operationIndex, opDiv, btn) {
     patchId: patchId,
     operationIndex: operationIndex,
   }, function() { /* done */ });
+}
+
+function scrollToTask(taskId) {
+  state.scrolling = true;
+  setTimeout(function() { state.scrolling = false; }, 3000);
+
+  apiGet(state.webAppUrl + '?action=get_task_row&taskId=' + encodeURIComponent(taskId), function(response) {
+    if (response && response.ok && response.data && response.data.row) {
+      var sheetId = response.data.sheetId;
+      var row = response.data.row;
+      // Use scripting to update the hash without reloading the page
+      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        if (tabs.length) {
+          chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: function(gid, range) {
+              window.location.hash = 'gid=' + gid + '&range=A' + range;
+            },
+            args: [sheetId, row],
+          });
+        }
+      });
+    }
+  });
 }
 
 function scrollToStory(storyId) {
@@ -888,7 +1127,13 @@ function checkAllDone() {
     card.style.display = hasVisible ? '' : 'none';
   });
 
-  document.getElementById('all-done').style.display = visibleCount === 0 && ops.length ? 'block' : 'none';
+  if (visibleCount === 0 && ops.length) {
+    // All patches reviewed — fetch to see if there are more
+    setTimeout(function() {
+      state.lastUrl = null;
+      fetchAllPatches();
+    }, 1000);
+  }
 }
 
 function getStoryTitle(items) {
@@ -1039,6 +1284,69 @@ function _wordDiff(oldLine, newLine) {
   });
 
   return html;
+}
+
+function _makeTaskFieldEditable(valueDiv, op, fieldKey, proposedVal, liveVal) {
+  valueDiv.style.cursor = 'text';
+  var editing = false;
+
+  valueDiv.addEventListener('click', function(e) {
+    if (editing) return;
+    if (e.target.tagName === 'BUTTON') return;
+    editing = true;
+
+    var textarea = document.createElement('textarea');
+    textarea.className = 'op-edit-textarea';
+    textarea.value = proposedVal;
+    textarea.rows = Math.max(3, (proposedVal || '').split('\n').length + 1);
+
+    var btnRow = document.createElement('div');
+    btnRow.className = 'op-edit-actions';
+    var doneBtn = document.createElement('button');
+    doneBtn.className = 'op-edit-done';
+    doneBtn.textContent = 'Done';
+    doneBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      proposedVal = textarea.value;
+      // Update the op object
+      if (fieldKey === 'acceptance_criteria') {
+        op.acceptance_criteria = proposedVal.split('\n').filter(Boolean);
+      } else {
+        op[fieldKey] = proposedVal;
+      }
+      // Re-render the field
+      editing = false;
+      valueDiv.innerHTML = '';
+      if (liveVal && liveVal !== proposedVal) {
+        valueDiv.className = 'task-field-diff';
+        valueDiv.innerHTML = buildLineDiff(liveVal, proposedVal);
+      } else {
+        valueDiv.className = op.type === 'create' ? 'diff-add' : 'task-field-value';
+        valueDiv.textContent = proposedVal;
+      }
+    });
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'op-edit-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      editing = false;
+      if (liveVal && liveVal !== proposedVal) {
+        valueDiv.className = 'task-field-diff';
+        valueDiv.innerHTML = buildLineDiff(liveVal, proposedVal);
+      } else {
+        valueDiv.className = op.type === 'create' ? 'diff-add' : 'task-field-value';
+        valueDiv.textContent = proposedVal;
+      }
+    });
+    btnRow.appendChild(doneBtn);
+    btnRow.appendChild(cancelBtn);
+
+    valueDiv.innerHTML = '';
+    valueDiv.appendChild(textarea);
+    valueDiv.appendChild(btnRow);
+    textarea.focus();
+  });
 }
 
 function _resetReloadBtn() {
