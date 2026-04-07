@@ -11,28 +11,50 @@
     <button id="save-config">Save</button>
   </div>
 
-  <div class="section-header" id="source-section" style="display:none;">
-    <div class="section-label">Meeting Summary</div>
-    <div class="section-link" id="source-header"></div>
-  </div>
-
-  <div class="feature-docs-section" id="feature-docs-section" style="display:none;">
-    <div class="section-label">Review Patch For</div>
-    <div class="feature-docs-list" id="feature-docs-list"></div>
-  </div>
+  <nav class="view-tabs" id="view-tabs" style="display:none;">
+    <button class="view-tab active" data-view="patches">Patches</button>
+    <button class="view-tab" data-view="tasks">Tasks</button>
+  </nav>
 
   <div class="status-bar" id="status-bar"></div>
 
-  <div class="actions-panel" id="actions-panel" style="display:none;">
-    <button class="action-btn" id="btn-reload">Fetch Patches</button>
-    <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
-    <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
-    <button class="action-btn" id="btn-open-spreadsheet">Open Task Spreadsheet</button>
-    <button class="action-btn" id="btn-open-drive">Open Drive</button>
-    <button class="action-btn" id="btn-settings">Settings</button>
-    <div class="debug-output" id="debug-output" style="display:none;"></div>
+  <!-- Patches view -->
+  <div class="view" id="view-patches">
+    <div class="section-header" id="source-section" style="display:none;">
+      <div class="section-label">Meeting Summary</div>
+      <div class="section-link" id="source-header"></div>
+    </div>
+
+    <div class="feature-docs-section" id="feature-docs-section" style="display:none;">
+      <div class="section-label">Review Patch For</div>
+      <div class="feature-docs-list" id="feature-docs-list"></div>
+    </div>
+
+    <div class="actions-panel" id="actions-panel" style="display:none;">
+      <button class="action-btn" id="btn-reload">Fetch Patches</button>
+      <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
+      <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
+      <button class="action-btn" id="btn-open-spreadsheet">Open Task Spreadsheet</button>
+      <button class="action-btn" id="btn-open-drive">Open Drive</button>
+      <button class="action-btn" id="btn-settings">Settings</button>
+      <div class="debug-output" id="debug-output" style="display:none;"></div>
+    </div>
+
+    <div id="content">
+      <div class="loading" id="loading" style="display:none;">Loading Patches...</div>
+      <div class="patch-list" id="patch-list"></div>
+      <div class="all-done" id="all-done" style="display:none;">All patches reviewed</div>
+    </div>
   </div>
 
+  <!-- Tasks view -->
+  <div class="view" id="view-tasks" style="display:none;">
+    <div class="loading" id="tasks-loading" style="display:none;">Loading Tasks...</div>
+    <div id="task-list"></div>
+    <div class="all-done" id="tasks-empty" style="display:none;">No tasks found</div>
+  </div>
+
+  <!-- Settings overlay -->
   <div class="settings-panel" id="settings-panel" style="display:none;">
     <div class="section-label">Settings</div>
     <div class="settings-field">
@@ -41,31 +63,30 @@
     </div>
     <div class="settings-field">
       <label>Gemini Model</label>
-      <input type="text" id="setting-gemini-model" placeholder="gemini-2.0-flash">
+      <input type="text" id="setting-gemini-model" placeholder="gemini-3-pro-preview">
     </div>
     <div class="settings-field">
-      <label>Shared Drive ID</label>
-      <input type="text" id="setting-drive-id" placeholder="0ABcDeFgHiJk...">
+      <label>API Key (for external access)</label>
+      <input type="text" id="setting-api-key" placeholder="Optional — protects task endpoints">
     </div>
-    <div class="settings-field">
-      <label>Approver Emails (comma separated)</label>
-      <input type="text" id="setting-approvers" placeholder="alice@co.com, bob@co.com">
-    </div>
-    <div class="settings-field">
-      <label>Debounce Minutes</label>
-      <input type="text" id="setting-debounce" placeholder="10">
+    <div class="section-label" style="margin-top:14px;">Projects</div>
+    <div id="settings-projects"></div>
+    <div id="add-project-form" style="margin-top:8px;">
+      <div class="settings-field">
+        <label>Project Name</label>
+        <input type="text" id="add-project-name" placeholder="my-project">
+      </div>
+      <div class="settings-field">
+        <label>Shared Drive ID</label>
+        <input type="text" id="add-project-drive-id" placeholder="0ABcDeFgHiJk...">
+      </div>
+      <button class="action-btn" id="btn-add-project" style="margin-bottom:12px;">Add Project</button>
     </div>
     <div class="settings-actions">
       <button class="action-btn" id="btn-save-settings">Save</button>
       <button class="action-btn settings-cancel" id="btn-cancel-settings">Cancel</button>
     </div>
     <div class="settings-message" id="settings-message" style="display:none;"></div>
-  </div>
-
-  <div id="content">
-    <div class="loading" id="loading" style="display:none;">Loading Patches...</div>
-    <div class="patch-list" id="patch-list"></div>
-    <div class="all-done" id="all-done" style="display:none;">All patches reviewed</div>
   </div>
 
   <script src="sidepanel.js"></script>

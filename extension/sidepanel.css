@@ -489,6 +489,73 @@ body {
   padding-left: 0;
 }
 
+/* View tabs */
+.view-tabs {
+  display: flex;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0;
+}
+.view-tab {
+  flex: 1;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: #5f6368;
+  cursor: pointer;
+}
+.view-tab:hover {
+  color: #202124;
+  background: #f8f9fa;
+}
+.view-tab.active {
+  color: #1a73e8;
+  border-bottom-color: #1a73e8;
+}
+
+/* Task list */
+.task-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f3f4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-item:hover {
+  background: #f8f9fa;
+}
+.task-id {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a73e8;
+  flex-shrink: 0;
+}
+.task-name {
+  font-size: 13px;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.task-status {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.task-status-ready { background: #e8f0fe; color: #1a73e8; }
+.task-status-working { background: #fef7e0; color: #e37400; }
+.task-status-finished { background: #e6f4ea; color: #1a7f37; }
+.task-status-error { background: #fce8e6; color: #c5221f; }
+.task-status-todo { background: #f1f3f4; color: #5f6368; }
+
 /* Loading */
 .loading {
   text-align: center;

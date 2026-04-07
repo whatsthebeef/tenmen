@@ -26,10 +26,17 @@ function doGet(e) {
     });
   }
 
+  if (action === 'list_tasks') {
+    if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
+    var tasks = getAllTasks();
+    return _jsonResponse({ tasks: tasks });
+  }
+
   if (action === 'get_story_text') {
     return _handleGetStoryText(e);
   }
   if (action === 'get_task_data') {
+    if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
     return _handleGetTaskData(e);
   }
   if (action === 'get_task_row') {
@@ -149,21 +156,35 @@ function doPost(e) {
 
     // Config endpoints — don't require isConfigured
     if (action === 'get_config') {
+      var projects = getProjects();
+      var projectConfigs = {};
+      projects.forEach(function(p) {
+        projectConfigs[p] = { SHARED_DRIVE_ID: getProjectSharedDriveId(p) || '' };
+      });
       return _jsonResponse({
         GEMINI_API_KEY: getGeminiApiKey() || '',
         GEMINI_MODEL: getGeminiModel() || '',
-        SHARED_DRIVE_ID: getSharedDriveId() || '',
-        APPROVERS: (getApproverEmails() || []).join(', '),
-        DEBOUNCE_MINUTES: String(getDebounceMinutes()),
+        API_KEY: getApiKey() || '',
+        PROJECTS: projects,
+        projectConfigs: projectConfigs,
         configured: isConfigured(),
       });
     }
     if (action === 'save_config') {
       if (payload.GEMINI_API_KEY) setConfigValue('GEMINI_API_KEY', payload.GEMINI_API_KEY);
       if (payload.GEMINI_MODEL) setConfigValue('GEMINI_MODEL', payload.GEMINI_MODEL);
-      if (payload.SHARED_DRIVE_ID) setConfigValue('SHARED_DRIVE_ID', payload.SHARED_DRIVE_ID);
-      if (payload.APPROVERS) setConfigValue('APPROVERS', payload.APPROVERS);
-      if (payload.DEBOUNCE_MINUTES) setConfigValue('DEBOUNCE_MINUTES', payload.DEBOUNCE_MINUTES);
+      if (payload.API_KEY !== undefined) setConfigValue('API_KEY', payload.API_KEY);
+      // Save per-project shared drive IDs
+      if (payload.projectConfigs) {
+        var projectNames = Object.keys(payload.projectConfigs);
+        for (var i = 0; i < projectNames.length; i++) {
+          var pName = projectNames[i];
+          var pConfig = payload.projectConfigs[pName];
+          if (pConfig && pConfig.SHARED_DRIVE_ID) {
+            setProjectSharedDriveId(pName, pConfig.SHARED_DRIVE_ID);
+          }
+        }
+      }
       // Auto-detect and save web app URL
       var scriptUrl = ScriptApp.getService().getUrl();
       if (scriptUrl) setConfigValue('WEB_APP_URL', scriptUrl);
@@ -175,14 +196,44 @@ function doPost(e) {
         return _jsonResponse({ success: true, message: 'Settings saved. Setup error: ' + e.message });
       }
     }
+    if (action === 'init_project') {
+      var projectName = payload.projectName;
+      if (!projectName) return _jsonResponse({ error: 'projectName is required' }, 400);
+      if (!payload.sharedDriveId) return _jsonResponse({ error: 'sharedDriveId is required' }, 400);
+      addProject(projectName);
+      setProjectSharedDriveId(projectName, payload.sharedDriveId);
+      var initScriptUrl = ScriptApp.getService().getUrl();
+      if (initScriptUrl) setConfigValue('WEB_APP_URL', initScriptUrl);
+      // Create spreadsheet, folders, and polling trigger if configured
+      var setupMessage = '';
+      if (isConfigured()) {
+        try {
+          finalizeSetup();
+          setupMessage = 'Resources initialized.';
+        } catch (setupErr) {
+          setupMessage = 'Setup error: ' + setupErr.message;
+        }
+      } else {
+        setupMessage = 'Project added. Set Gemini API Key in Settings to complete setup.';
+      }
+      return _jsonResponse({ success: true, project: projectName, projects: getProjects(), message: setupMessage });
+    }
+    if (action === 'remove_project') {
+      var rmName = payload.projectName;
+      if (!rmName) return _jsonResponse({ error: 'projectName is required' }, 400);
+      removeProject(rmName);
+      return _jsonResponse({ success: true, projects: getProjects() });
+    }
 
     if (!isConfigured()) {
       return _jsonResponse({ error: 'Not configured. Use the extension side panel Settings to configure.' }, 503);
     }
 
     if (action === 'claim_next') {
+      if (!_checkApiKey(payload.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
       return _handleClaimNext();
     } else if (action === 'finish_task') {
+      if (!_checkApiKey(payload.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
       return _handleFinishTask(payload.taskId);
     } else if (action === 'apply_operation') {
       return _handleApplyOperation(payload.patchId, payload.operationIndex);
@@ -206,7 +257,7 @@ function doPost(e) {
   }
 }
 
-// Claims the oldest Ready task by date_created (FIFO) and sets it to Working.
+// Claims the oldest Ready task by date_updated (FIFO) and sets it to Working.
 function _handleClaimNext() {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -220,13 +271,13 @@ function _handleClaimNext() {
 
     var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, TASKS_HEADERS.length).getValues();
 
-    // Find all Ready tasks, then pick the one with the oldest date_created
+    // Find all Ready tasks, then pick the one with the oldest date_updated
     var oldestIdx = -1;
     var oldestDate = null;
 
     for (var i = 0; i < data.length; i++) {
-      if (String(data[i][6]) === 'Ready') {
-        var dateVal = data[i][7] instanceof Date ? data[i][7] : new Date(data[i][7]);
+      if (String(data[i][5]) === 'Ready') {
+        var dateVal = data[i][6] instanceof Date ? data[i][6] : new Date(data[i][6]);
         if (oldestIdx === -1 || dateVal < oldestDate) {
           oldestIdx = i;
           oldestDate = dateVal;
@@ -239,7 +290,8 @@ function _handleClaimNext() {
     }
 
     var rowNum = oldestIdx + 2;
-    sheet.getRange(rowNum, 7).setValue('Working');
+    sheet.getRange(rowNum, 6).setValue('Working');
+    sheet.getRange(rowNum, 7).setValue(new Date().toISOString());
 
     var row = data[oldestIdx];
     var task = {
@@ -248,8 +300,8 @@ function _handleClaimNext() {
       description: String(row[2]),
       acceptance_criteria: String(row[3]),
       notes: String(row[4]),
-      dev_notes: String(row[5]),
       status: 'Working',
+      additional_notes: String(row[7]),
     };
 
     return _jsonResponse(task);
@@ -433,6 +485,10 @@ function _handleGetTaskData(e) {
   if (!task) {
     return _jsonResponse({ error: 'Task not found: ' + taskId, task: null });
   }
+  if (task.status === 'Ready') {
+    updateTask(taskId, { status: 'Working' });
+    task.status = 'Working';
+  }
   return _jsonResponse({ task: task });
 }
 
@@ -468,8 +524,7 @@ function _applyTaskPatchOperation(op) {
       acceptance_criteria: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || ''),
       notes: op.notes || '',
       status: 'To Do',
-      sourceDoc: '',
-      dateCreated: today,
+      additional_notes: '',
     });
     Logger.log('Task patch: created ' + op.id);
   } else if (op.type === 'update') {
@@ -505,8 +560,6 @@ function _handleSetup(e) {
     appName: getConfigValue('APP_NAME') || '',
     geminiApiKey: getConfigValue('GEMINI_API_KEY') || '',
     geminiModel: getConfigValue('GEMINI_MODEL') || 'gemini-3-pro-preview',
-    sharedDriveId: getConfigValue('SHARED_DRIVE_ID') || '',
-    approvers: getConfigValue('APPROVERS') || '',
   };
 
   var html = '<!DOCTYPE html><html><head>'
@@ -550,12 +603,6 @@ function _handleSetup(e) {
     + '<label for="geminiModel">Gemini Model</label>'
     + '<input id="geminiModel" value="' + _escapeHtml(current.geminiModel) + '" placeholder="gemini-3-pro-preview">'
     + '<div class="hint">Model ID for AI calls. Leave default unless you have a reason to change it.</div>'
-    + '<label for="sharedDriveId">Shared Drive ID</label>'
-    + '<input id="sharedDriveId" value="' + _escapeHtml(current.sharedDriveId) + '" placeholder="0AL43-hTVA8dNUk9PVA" required>'
-    + '<div class="hint">From the Shared Drive URL: drive.google.com/drive/folders/<b>THIS_ID</b></div>'
-    + '<label for="approvers">Approver Emails</label>'
-    + '<textarea id="approvers" placeholder="alice@example.com, bob@example.com">' + _escapeHtml(current.approvers) + '</textarea>'
-    + '<div class="hint">Comma-separated list of approver email addresses</div>'
     + '<button type="submit">Save</button>'
     + ' <button type="button" onclick="window.top.location.href=\'' + _escapeHtml(getWebAppUrl() || '') + '\'" style="background:#fff;color:#5f6368;border:1px solid #dadce0;">Cancel</button>'
     + '</form>'
@@ -569,8 +616,6 @@ function _handleSetup(e) {
     + '    appName: document.getElementById("appName").value.trim(),'
     + '    geminiApiKey: document.getElementById("geminiApiKey").value.trim(),'
     + '    geminiModel: document.getElementById("geminiModel").value.trim(),'
-    + '    sharedDriveId: document.getElementById("sharedDriveId").value.trim(),'
-    + '    approvers: document.getElementById("approvers").value.trim()'
     + '  };'
     + '  google.script.run'
     + '    .withSuccessHandler(function(result) {'
@@ -600,15 +645,13 @@ function _handleSetup(e) {
 
 // Called from the setup form via google.script.run (must be top-level, not prefixed with _)
 function saveConfig(config) {
-  if (!config.geminiApiKey || !config.sharedDriveId) {
-    throw new Error('Gemini API Key and Shared Drive ID are required.');
+  if (!config.geminiApiKey) {
+    throw new Error('Gemini API Key is required.');
   }
 
   setConfigValue('APP_NAME', config.appName || 'Tenmen');
   setConfigValue('GEMINI_API_KEY', config.geminiApiKey);
   setConfigValue('GEMINI_MODEL', config.geminiModel || 'gemini-3-pro-preview');
-  setConfigValue('SHARED_DRIVE_ID', config.sharedDriveId);
-  setConfigValue('APPROVERS', config.approvers || '');
 
   var webAppUrl = ScriptApp.getService().getUrl();
   if (webAppUrl) {
@@ -814,8 +857,6 @@ function saveAndResubmitPatch(proposalId, patchPlan) {
 
   // Reset approvals and notify
   resetApprovals(proposalId);
-  var approvers = getApproverEmails();
-  sendResubmitEmail(proposalId, approvers);
 }
 
 // Rewrite the visible section of the proposal doc to match the updated patch plan

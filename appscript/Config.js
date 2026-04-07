@@ -13,8 +13,8 @@ var CONFIG_DEFAULTS = {
   DEBOUNCE_MINUTES: '10',
 };
 
-// Keys that must be set by the user via the setup form
-var REQUIRED_CONFIG_KEYS = ['GEMINI_API_KEY', 'SHARED_DRIVE_ID', 'APPROVERS'];
+// Keys that must be set before the app is considered configured
+var REQUIRED_CONFIG_KEYS = ['GEMINI_API_KEY', 'PROJECTS'];
 
 function getAppName() {
   return getConfigValue('APP_NAME') || 'Tenmen';
@@ -61,7 +61,76 @@ function isConfigured() {
   return true;
 }
 
+// ============================================================
+// Project list — comma-separated project names
+// ============================================================
+
+function getProjects() {
+  var val = getConfigValue('PROJECTS');
+  if (!val) return [];
+  return val.split(',').map(function(p) { return p.trim(); }).filter(Boolean);
+}
+
+function addProject(projectName) {
+  var projects = getProjects();
+  if (projects.indexOf(projectName) === -1) {
+    projects.push(projectName);
+  }
+  setConfigValue('PROJECTS', projects.join(','));
+}
+
+function removeProject(projectName) {
+  var projects = getProjects().filter(function(p) { return p !== projectName; });
+  setConfigValue('PROJECTS', projects.join(','));
+  deleteProp('CONFIG_' + projectName + '_SHARED_DRIVE_ID');
+}
+
+// Called via clasp run from auriculator.sh
+function initProject(projectName, sharedDriveId) {
+  if (!projectName || !sharedDriveId) {
+    return { error: 'projectName and sharedDriveId are required' };
+  }
+  addProject(projectName);
+  setProjectSharedDriveId(projectName, sharedDriveId);
+  var scriptUrl = ScriptApp.getService().getUrl();
+  if (scriptUrl) setConfigValue('WEB_APP_URL', scriptUrl);
+  return { success: true, project: projectName, projects: getProjects() };
+}
+
+function getProjectSharedDriveId(projectName) {
+  return getConfigValue(projectName + '_SHARED_DRIVE_ID');
+}
+
+function setProjectSharedDriveId(projectName, driveId) {
+  setConfigValue(projectName + '_SHARED_DRIVE_ID', driveId);
+}
+
+// ============================================================
+// API key
+// ============================================================
+
+function getApiKey() {
+  return getConfigValue('API_KEY');
+}
+
+function _checkApiKey(key) {
+  var stored = getApiKey();
+  if (!stored) return true;
+  return key === stored;
+}
+
+// ============================================================
+// Global config getters
+// ============================================================
+
 function getSharedDriveId() {
+  // For backward compat: if there's a single project, return its drive ID.
+  // Otherwise return the legacy global value.
+  var projects = getProjects();
+  if (projects.length === 1) {
+    var projDriveId = getProjectSharedDriveId(projects[0]);
+    if (projDriveId) return projDriveId;
+  }
   return getConfigValue('SHARED_DRIVE_ID');
 }
 
@@ -116,16 +185,6 @@ function getPatchesFolderId() {
 
 function getWebAppUrl() {
   return getConfigValue('WEB_APP_URL');
-}
-
-// ============================================================
-// Approvers — stored as comma-separated string
-// ============================================================
-
-function getApproverEmails() {
-  var val = getConfigValue('APPROVERS');
-  if (!val) return [];
-  return val.split(',').map(function(e) { return e.trim(); }).filter(Boolean);
 }
 
 // ============================================================

@@ -7,6 +7,7 @@ var state = {
   featureId: null,
   patches: [],
   loading: false,
+  activeView: 'patches',
 };
 
 // ============================================================
@@ -33,6 +34,7 @@ document.addEventListener('DOMContentLoaded', function() {
       state.webAppUrl = result.webAppUrl;
       document.getElementById('web-app-url').value = result.webAppUrl;
       document.getElementById('config-bar').style.display = 'none';
+      document.getElementById('view-tabs').style.display = '';
       checkConfigured();
       detectFeatureDoc();
     }
@@ -45,6 +47,7 @@ document.addEventListener('DOMContentLoaded', function() {
       state.webAppUrl = url;
       chrome.storage.local.set({ webAppUrl: url });
       document.getElementById('config-bar').style.display = 'none';
+      document.getElementById('view-tabs').style.display = '';
       detectFeatureDoc();
     }
   });
@@ -175,6 +178,15 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('settings-panel').style.display = 'none';
     detectFeatureDoc();
   });
+
+  document.getElementById('btn-add-project').addEventListener('click', addProject);
+
+  // View tab switching
+  document.querySelectorAll('.view-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      switchView(this.getAttribute('data-view'));
+    });
+  });
 });
 
 // ============================================================
@@ -272,7 +284,11 @@ function fetchAllPatches() {
     if (state.showingSettings) return;
 
     if (!response || !response.ok) {
-      setStatus('Error loading patches: ' + (response ? response.error : 'no response'), 'error');
+      var debugEl = document.getElementById('debug-output');
+      var errSteps = ['Failed to load patches'];
+      if (response && response.error) errSteps.push(response.error);
+      if (response && response.raw) errSteps.push(response.raw);
+      _showDebugCard(debugEl, 'Error', errSteps);
       document.getElementById('actions-panel').style.display = 'block';
       return;
     }
@@ -1034,15 +1050,54 @@ function showSettings() {
       var d = response.data;
       document.getElementById('setting-gemini-key').value = d.GEMINI_API_KEY || '';
       document.getElementById('setting-gemini-model').value = d.GEMINI_MODEL || '';
-      document.getElementById('setting-drive-id').value = d.SHARED_DRIVE_ID || '';
-      document.getElementById('setting-approvers').value = d.APPROVERS || '';
-      document.getElementById('setting-debounce').value = d.DEBOUNCE_MINUTES || '10';
+      document.getElementById('setting-api-key').value = d.API_KEY || '';
+      _renderProjectSettings(d.PROJECTS || [], d.projectConfigs || {});
     }
   });
 }
 
+function _renderProjectSettings(projects, projectConfigs) {
+  var container = document.getElementById('settings-projects');
+  container.innerHTML = '';
+  if (!projects.length) {
+    container.innerHTML = '<div style="font-size:12px;color:#5f6368;padding:6px 0;">No projects configured. Use auriculator.sh init to add projects.</div>';
+    return;
+  }
+  projects.forEach(function(name) {
+    var config = projectConfigs[name] || {};
+    var div = document.createElement('div');
+    div.className = 'settings-field';
+    var label = document.createElement('div');
+    label.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;';
+    label.innerHTML = '<label style="margin:0;">' + name + ' — Shared Drive ID</label>';
+    var removeBtn = document.createElement('button');
+    removeBtn.textContent = 'Remove';
+    removeBtn.style.cssText = 'background:transparent;border:none;color:#c5221f;font-size:11px;cursor:pointer;padding:2px 6px;';
+    removeBtn.addEventListener('click', (function(projectName) {
+      return function() {
+        if (!confirm('Remove project "' + projectName + '"?')) return;
+        apiPost(state.webAppUrl, { action: 'remove_project', projectName: projectName }, function(response) {
+          if (response && response.ok && response.data && response.data.success) {
+            showSettings();
+          }
+        });
+      };
+    })(name));
+    label.appendChild(removeBtn);
+    div.appendChild(label);
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.setAttribute('data-project', name);
+    input.setAttribute('data-field', 'SHARED_DRIVE_ID');
+    input.value = config.SHARED_DRIVE_ID || '';
+    input.placeholder = '0ABcDeFgHiJk...';
+    div.appendChild(input);
+    container.appendChild(div);
+  });
+}
+
 function _setSettingsInputsEnabled(enabled) {
-  var inputs = document.querySelectorAll('.settings-field input');
+  var inputs = document.querySelectorAll('.settings-panel input');
   inputs.forEach(function(inp) { inp.disabled = !enabled; });
   document.getElementById('btn-save-settings').disabled = !enabled;
   document.getElementById('btn-cancel-settings').disabled = !enabled;
@@ -1056,13 +1111,20 @@ function saveSettings() {
   var msgEl = document.getElementById('settings-message');
   msgEl.style.display = 'none';
 
+  var projectConfigs = {};
+  document.querySelectorAll('#settings-projects input[data-project]').forEach(function(inp) {
+    var pName = inp.getAttribute('data-project');
+    var field = inp.getAttribute('data-field');
+    if (!projectConfigs[pName]) projectConfigs[pName] = {};
+    projectConfigs[pName][field] = inp.value.trim();
+  });
+
   var payload = {
     action: 'save_config',
     GEMINI_API_KEY: document.getElementById('setting-gemini-key').value.trim(),
     GEMINI_MODEL: document.getElementById('setting-gemini-model').value.trim(),
-    SHARED_DRIVE_ID: document.getElementById('setting-drive-id').value.trim(),
-    APPROVERS: document.getElementById('setting-approvers').value.trim(),
-    DEBOUNCE_MINUTES: document.getElementById('setting-debounce').value.trim(),
+    API_KEY: document.getElementById('setting-api-key').value.trim(),
+    projectConfigs: projectConfigs,
   };
 
   apiPost(state.webAppUrl, payload, function(response) {
@@ -1089,6 +1151,34 @@ function saveSettings() {
   });
 }
 
+function addProject() {
+  var nameEl = document.getElementById('add-project-name');
+  var driveEl = document.getElementById('add-project-drive-id');
+  var name = nameEl.value.trim();
+  var driveId = driveEl.value.trim();
+  if (!name || !driveId) return;
+
+  var btn = document.getElementById('btn-add-project');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+
+  apiPost(state.webAppUrl, { action: 'init_project', projectName: name, sharedDriveId: driveId }, function(response) {
+    btn.disabled = false;
+    btn.textContent = 'Add Project';
+    if (response && response.ok && response.data && response.data.success) {
+      nameEl.value = '';
+      driveEl.value = '';
+      showSettings();
+    } else {
+      var msgEl = document.getElementById('settings-message');
+      var err = (response && response.data) ? response.data.error : 'Failed to add project';
+      msgEl.textContent = err;
+      msgEl.className = 'settings-message error';
+      msgEl.style.display = 'block';
+    }
+  });
+}
+
 // Also show settings automatically if not configured
 function checkConfigured() {
   if (!state.webAppUrl) return;
@@ -1097,6 +1187,82 @@ function checkConfigured() {
       state.showingSettings = true;
       showSettings();
     }
+  });
+}
+
+// ============================================================
+// View switching
+// ============================================================
+
+function switchView(name) {
+  state.activeView = name;
+  document.querySelectorAll('.view').forEach(function(v) { v.style.display = 'none'; });
+  document.querySelectorAll('.view-tab').forEach(function(t) { t.classList.remove('active'); });
+  document.getElementById('view-' + name).style.display = '';
+  var tab = document.querySelector('[data-view="' + name + '"]');
+  if (tab) tab.classList.add('active');
+
+  if (name === 'tasks') {
+    fetchTasks();
+  }
+}
+
+// ============================================================
+// Tasks view
+// ============================================================
+
+function fetchTasks() {
+  if (!state.webAppUrl) return;
+  document.getElementById('tasks-loading').style.display = 'block';
+  document.getElementById('task-list').innerHTML = '';
+  document.getElementById('tasks-empty').style.display = 'none';
+
+  apiGet(state.webAppUrl + '?action=list_tasks', function(response) {
+    document.getElementById('tasks-loading').style.display = 'none';
+    if (!response || !response.ok || !response.data || response.data.error) {
+      var errSteps = ['Failed to load tasks'];
+      if (response && response.error) errSteps.push(response.error);
+      if (response && response.raw) errSteps.push(response.raw);
+      if (response && response.data && response.data.error) errSteps.push(response.data.error);
+      var container = document.getElementById('task-list');
+      container.innerHTML = '<div class="debug-output" id="tasks-debug"></div>';
+      _showDebugCard(document.getElementById('tasks-debug'), 'Error', errSteps);
+      return;
+    }
+    var tasks = response.data.tasks || [];
+    if (!tasks.length) {
+      document.getElementById('tasks-empty').textContent = 'No tasks found';
+      document.getElementById('tasks-empty').style.display = 'block';
+      return;
+    }
+    renderTaskList(tasks);
+  });
+}
+
+function renderTaskList(tasks) {
+  var container = document.getElementById('task-list');
+  container.innerHTML = '';
+  tasks.forEach(function(task) {
+    var div = document.createElement('div');
+    div.className = 'task-item';
+
+    var id = document.createElement('span');
+    id.className = 'task-id';
+    id.textContent = task.id;
+
+    var name = document.createElement('span');
+    name.className = 'task-name';
+    name.textContent = task.name || task.description || '';
+
+    var status = document.createElement('span');
+    var statusKey = (task.status || '').toLowerCase().replace(/\s+/g, '');
+    status.className = 'task-status task-status-' + statusKey;
+    status.textContent = task.status;
+
+    div.appendChild(id);
+    div.appendChild(name);
+    div.appendChild(status);
+    container.appendChild(div);
   });
 }
 

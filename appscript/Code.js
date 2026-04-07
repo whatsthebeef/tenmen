@@ -330,11 +330,9 @@ function _processMeetingSummary(fileId, fileName, driveId) {
   debug.steps.push('Gemini identified features: ' + featureIds.join(', '));
   Logger.log('Identified ' + featureIds.length + ' relevant feature(s): ' + featureIds.join(', '));
 
-  var approvers = getApproverEmails();
-
   featureIds.forEach(function(featureId) {
     try {
-      var patchResult = _createFeatureDocProposalForFeature(featureId, content, fileName, fileId, driveId, approvers);
+      var patchResult = _createFeatureDocProposalForFeature(featureId, content, fileName, fileId, driveId);
       if (patchResult && patchResult.patchFile) {
         debug.steps.push('Created patch for ' + featureId + ': ' + patchResult.patchFile + ' (' + patchResult.operationCount + ' operations)');
       } else {
@@ -354,7 +352,7 @@ function _processMeetingSummary(fileId, fileName, driveId) {
   return debug;
 }
 
-function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName, sourceFileId, driveId, approvers) {
+function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName, sourceFileId, driveId) {
   if (hasActiveProposal(featureId, 'user_story')) {
     Logger.log('Active feature doc proposal already exists for ' + featureId + ', creating new one anyway');
   }
@@ -422,22 +420,6 @@ function _createFeatureDocProposalForFeature(featureId, summaryContent, fileName
 
   writePatchFile(driveId, patchFileName, patchData);
   Logger.log('Saved patch file: ' + patchFileName + ' with ' + operations.length + ' operations');
-
-  // Send notification email
-  if (approvers.length) {
-    var changeSummary = operations.map(function(op) {
-      return {
-        type: op.type,
-        location: op.location || '',
-        original: op.match_text || null,
-        proposed: op.new_text || (op.criterion ? _formatCriterionForDisplay(op.criterion) : op.text) || null,
-        reason: op.reason || '',
-        source: op.source || '',
-      };
-    });
-    var docUrl = 'https://docs.google.com/document/d/' + docInfo.fileId + '/edit';
-    sendPatchNotificationEmail(featureId, patchFileName, changeSummary, approvers, docUrl);
-  }
 
   Logger.log('Created patch for ' + featureId);
   return { patchFile: patchFileName, operationCount: operations.length };
@@ -625,23 +607,6 @@ function _processStableFeatureDoc(file, driveId) {
 
   writePatchFile(driveId, patchFileName, taskPatchData);
   Logger.log('Saved task patch file: ' + patchFileName + ' with ' + operations.length + ' operations');
-
-  // Notify approvers
-  var approvers = getApproverEmails();
-  if (approvers.length) {
-    var changeSummary = operations.map(function(op) {
-      return {
-        type: op.type,
-        location: op.id || '',
-        original: null,
-        proposed: op.summary || '',
-        reason: op.reason || '',
-        source: '',
-      };
-    });
-    var docUrl = ssId ? 'https://docs.google.com/spreadsheets/d/' + ssId + '/edit' : '';
-    sendPatchNotificationEmail(featureId, patchFileName, changeSummary, approvers, docUrl);
-  }
 
   Logger.log('Created task patch for ' + featureId);
 }

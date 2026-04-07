@@ -177,7 +177,7 @@ function applyApprovedTaskProposal(proposalId, record) {
         acceptance_criteria: task.acceptance_criteria || '',
         notes: task.notes || '',
         status: 'To Do',
-        dateCreated: now,
+        additional_notes: '',
       });
       Logger.log('Created task: ' + task.id);
     } else if (task.action === 'update') {

@@ -5,7 +5,7 @@
 const MAIN_TAB = 'Tasks';
 const PROPOSALS_TAB = 'Proposals';
 const APPROVALS_TAB = 'Approvals';
-const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'dev_notes', 'status', 'date_created'];
+const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'status', 'date_updated', 'additional_notes'];
 const PROPOSALS_HEADERS = ['proposal_id', 'type', 'feature_id', 'status', 'doc_id', 'doc_link', 'created_date'];
 const APPROVALS_HEADERS = ['proposal_id', 'user_email', 'status', 'timestamp', 'doc_link'];
 
@@ -67,9 +67,9 @@ function getAllTasks(featureId, excludeSignedOff) {
       description: String(row[2]),
       acceptance_criteria: String(row[3]),
       notes: String(row[4]),
-      dev_notes: String(row[5]),
-      status: String(row[6]),
-      dateCreated: row[7] instanceof Date ? row[7].toISOString() : String(row[7]),
+      status: String(row[5]),
+      dateUpdated: row[6] instanceof Date ? row[6].toISOString() : String(row[6]),
+      additional_notes: String(row[7]),
     };
     if (featureId && task.featureId !== featureId) return;
     if (excludeSignedOff && task.status === 'Signed Off') return;
@@ -87,7 +87,8 @@ function getTaskById(taskId) {
 function addTask(task) {
   var ss = getSpreadsheet();
   var sheet = ss.getSheetByName(MAIN_TAB);
-  sheet.appendRow([task.id, task.name, task.description, task.acceptance_criteria || '', task.notes || '', task.dev_notes || '', task.status, task.dateCreated]);
+  var now = new Date().toISOString();
+  sheet.appendRow([task.id, task.name, task.description, task.acceptance_criteria || '', task.notes || '', task.status, now, task.additional_notes || '']);
 }
 
 function updateTask(taskId, updates) {
@@ -102,8 +103,10 @@ function updateTask(taskId, updates) {
       if (updates.description !== undefined) sheet.getRange(rowNum, 3).setValue(updates.description);
       if (updates.acceptance_criteria !== undefined) sheet.getRange(rowNum, 4).setValue(updates.acceptance_criteria);
       if (updates.notes !== undefined) sheet.getRange(rowNum, 5).setValue(updates.notes);
-      if (updates.dev_notes !== undefined) sheet.getRange(rowNum, 6).setValue(updates.dev_notes);
-      if (updates.status !== undefined) sheet.getRange(rowNum, 7).setValue(updates.status);
+      if (updates.status !== undefined) sheet.getRange(rowNum, 6).setValue(updates.status);
+      if (updates.additional_notes !== undefined) sheet.getRange(rowNum, 8).setValue(updates.additional_notes);
+      // Always update date_updated on any change
+      sheet.getRange(rowNum, 7).setValue(new Date().toISOString());
       return true;
     }
   }
@@ -126,10 +129,8 @@ function deleteTask(taskId) {
 
 // Tasks are appended in the order they appear in the changeset, preserving
 // chronological order. The claim_next endpoint picks the oldest Ready task
-// by date_created (FIFO), so insertion order matters.
+// by date_updated (FIFO), so insertion order matters.
 function applyTaskChanges(changeset, featureId) {
-  var now = new Date().toISOString();
-
   (changeset.additions || []).forEach(function(task) {
     addTask({
       id: task.id || '',
@@ -138,7 +139,7 @@ function applyTaskChanges(changeset, featureId) {
       acceptance_criteria: task.acceptance_criteria || '',
       notes: task.notes || '',
       status: task.status || 'To Do',
-      dateCreated: now,
+      additional_notes: '',
     });
   });
 
@@ -355,8 +356,3 @@ function cleanupApprovalRows(proposalId) {
   }
 }
 
-// ============================================================
-// Approvers
-// ============================================================
-
-// getApproverEmails is now defined in Config.js

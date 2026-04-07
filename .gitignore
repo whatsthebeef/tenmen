@@ -1,3 +1,4 @@
 .env
-planning/.deploy-config
-planning/.clasp.json
+appscript/.deploy-config
+appscript/.clasp.json
+node_modules
