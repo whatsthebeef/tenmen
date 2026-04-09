@@ -4,10 +4,13 @@
 
 var state = {
   webAppUrl: '',
-  featureId: null,
-  patches: [],
-  loading: false,
   activeView: 'patches',
+  allPatches: null,
+  loadedPatches: {},
+  cachedTasks: null,
+  currentPatch: null,
+  fetching: false,
+  hasFetchedOnce: false,
 };
 
 // ============================================================
@@ -36,7 +39,7 @@ document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('config-bar').style.display = 'none';
       document.getElementById('view-tabs').style.display = '';
       checkConfigured();
-      detectFeatureDoc();
+      fetchAllPatches();
     }
   });
 
@@ -48,25 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
       chrome.storage.local.set({ webAppUrl: url });
       document.getElementById('config-bar').style.display = 'none';
       document.getElementById('view-tabs').style.display = '';
-      detectFeatureDoc();
-    }
-  });
-
-  // Listen for tab changes — only reload when URL changes
-  chrome.tabs.onActivated.addListener(function() {
-    _checkUrlChanged();
-  });
-  chrome.tabs.onUpdated.addListener(function(tabId, changeInfo) {
-    if (changeInfo.url) {
-      _checkUrlChanged();
-    }
-  });
-
-  // Listen for scroll failure messages from content script
-  chrome.runtime.onMessage.addListener(function(message) {
-    if (message.type === 'scroll_failed') {
-      setStatus(message.message, 'error');
-      setTimeout(function() { document.getElementById('status-bar').style.display = 'none'; }, 3000);
+      fetchAllPatches();
     }
   });
 
@@ -74,44 +59,118 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('btn-process-summary').addEventListener('click', function() {
     var btn = this;
     btn.disabled = true;
-    btn.textContent = 'Processing...';
     var debugEl = document.getElementById('debug-output');
     debugEl.style.display = 'none';
+    var steps = [];
 
-    apiPost(state.webAppUrl, { action: 'process_summary' }, function(response) {
-      btn.disabled = false;
-      btn.textContent = 'Process Last Meeting Summary';
-
-      if (!response) {
-        _showDebugCard(debugEl, 'Error', ['No response from server']);
-        return;
-      }
-
-      if (!response.ok) {
-        var errSteps = ['Connection error: ' + (response.error || 'unknown')];
-        if (response.raw) errSteps.push(response.raw);
-        _showDebugCard(debugEl, 'Error', errSteps);
-        return;
-      }
-
-      var data = response.data || {};
-      var steps = [];
-
-      if (data.error) steps.push('ERROR: ' + data.error);
-      if (data.debug && data.debug.steps) steps = steps.concat(data.debug.steps);
-      if (!steps.length) steps.push(data.success ? 'Completed successfully' : 'No details available');
-
-      var hasError = steps.some(function(s) { return s.indexOf('ERROR') === 0; });
-      var hasPatch = steps.some(function(s) { return s.indexOf('Created patch') === 0; });
-      var title = hasError ? 'Processing completed with errors' : 'Processing complete';
+    function updateDebug(title) {
       _showDebugCard(debugEl, title, steps);
+    }
 
-      // If patches were created, refresh the view after a moment
-      if (hasPatch && !state.showingSettings) {
-        setTimeout(function() {
-          if (!state.showingSettings) fetchAllPatches();
-        }, 2000);
+    btn.textContent = 'Identifying features...';
+    steps.push('Identifying relevant features...');
+    updateDebug('Processing');
+
+    apiPost(state.webAppUrl, { action: 'identify_features' }, function(response) {
+      if (!response || !response.ok || !response.data || !response.data.success) {
+        var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
+        steps.push('ERROR: ' + err);
+        updateDebug('Error');
+        btn.disabled = false;
+        btn.textContent = 'Process Last Meeting Summary';
+        return;
       }
+
+      var idData = response.data.data;
+      steps.push('Read summary: ' + idData.fileName + ' (' + idData.contentLength + ' chars)');
+      steps.push('Found ' + idData.knownFeatures.length + ' feature doc(s)');
+
+      if (!idData.featureIds.length) {
+        steps.push('Gemini found no relevant features');
+        updateDebug('Processing complete');
+        btn.disabled = false;
+        btn.textContent = 'Process Last Meeting Summary';
+        return;
+      }
+
+      steps.push('Gemini identified features: ' + idData.featureIds.join(', '));
+      updateDebug('Processing');
+
+      // Process each feature: normalize → patch plan (sequential), technical notes (parallel)
+      var featureIds = idData.featureIds.slice();
+      var hasPatch = false;
+
+      function processNext() {
+        if (!featureIds.length) {
+          var title = steps.some(function(s) { return s.indexOf('ERROR') >= 0; })
+            ? 'Processing completed with errors' : 'Processing complete';
+          updateDebug(title);
+          btn.disabled = false;
+          btn.textContent = 'Process Last Meeting Summary';
+          if (hasPatch) {
+            setTimeout(function() { fetchAllPatches(); }, 1000);
+          }
+          return;
+        }
+
+        var fId = featureIds.shift();
+        btn.textContent = 'Normalizing ' + fId + '...';
+        steps.push(fId + ': Normalizing...');
+        updateDebug('Processing');
+
+        // Fire off technical notes in parallel (don't wait for it)
+        apiPost(state.webAppUrl, {
+          action: 'update_technical_notes',
+          fileId: idData.fileId,
+          featureId: fId,
+        }, function() { /* fire and forget */ });
+
+        // Step 1: Normalize
+        apiPost(state.webAppUrl, {
+          action: 'normalize_feature',
+          fileId: idData.fileId,
+          featureId: fId,
+        }, function(normResp) {
+          steps.pop();
+          if (!normResp || !normResp.ok || !normResp.data || !normResp.data.success) {
+            var err = (normResp && normResp.data && normResp.data.error) || 'Unknown error';
+            steps.push(fId + ': ERROR normalizing: ' + err);
+            updateDebug('Processing');
+            processNext();
+            return;
+          }
+
+          var normData = normResp.data.data;
+          btn.textContent = 'Generating patch for ' + fId + '...';
+          steps.push(fId + ': Generating patch plan...');
+          updateDebug('Processing');
+
+          // Step 2: Generate patch plan
+          apiPost(state.webAppUrl, {
+            action: 'generate_patch_plan',
+            fileId: idData.fileId,
+            fileName: idData.fileName,
+            featureId: fId,
+            normalizedDoc: normData.normalizedDoc,
+            comments: normData.comments,
+            docFileId: normData.docFileId,
+            docFileName: normData.docFileName,
+          }, function(patchResp) {
+            steps.pop();
+            if (patchResp && patchResp.ok && patchResp.data && patchResp.data.step) {
+              steps.push(patchResp.data.step);
+              if (patchResp.data.step.indexOf('Created patch') >= 0) hasPatch = true;
+            } else {
+              var err = (patchResp && patchResp.data && patchResp.data.error) || 'Unknown error';
+              steps.push(fId + ': ERROR: ' + err);
+            }
+            updateDebug('Processing');
+            processNext();
+          });
+        });
+      }
+
+      processNext();
     });
   });
 
@@ -129,55 +188,15 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('btn-reload').addEventListener('click', function() {
     var btn = this;
     btn.disabled = true;
-    btn.textContent = 'Processing...';
-    state.lastUrl = null;
+    btn.textContent = 'Fetching...';
     state._reloadBtn = btn;
-    detectFeatureDoc();
+    state.hasFetchedOnce = false;
+    fetchAllPatches();
   });
 
-  document.getElementById('btn-open-spreadsheet').addEventListener('click', function() {
-    var btn = this;
-    btn.textContent = 'Processing...';
-    btn.disabled = true;
-    apiGet(state.webAppUrl + '?action=get_urls', function(response) {
-      btn.textContent = 'Open Task Spreadsheet';
-      btn.disabled = false;
-      if (response && response.ok && response.data.spreadsheetUrl) {
-        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-          if (tabs.length) {
-            chrome.tabs.update(tabs[0].id, { url: response.data.spreadsheetUrl });
-          }
-        });
-      }
-    });
-  });
-
-  document.getElementById('btn-open-drive').addEventListener('click', function() {
-    var btn = this;
-    btn.textContent = 'Processing...';
-    btn.disabled = true;
-    apiGet(state.webAppUrl + '?action=get_urls', function(response) {
-      btn.textContent = 'Open Drive';
-      btn.disabled = false;
-      if (response && response.ok && response.data.driveUrl) {
-        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-          if (tabs.length) {
-            chrome.tabs.update(tabs[0].id, { url: response.data.driveUrl });
-          }
-        });
-      }
-    });
-  });
-
-  document.getElementById('btn-settings').addEventListener('click', showSettings);
+  document.getElementById('btn-patch-back').addEventListener('click', backToPatchIndex);
 
   document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
-
-  document.getElementById('btn-cancel-settings').addEventListener('click', function() {
-    state.showingSettings = false;
-    document.getElementById('settings-panel').style.display = 'none';
-    detectFeatureDoc();
-  });
 
   document.getElementById('btn-add-project').addEventListener('click', addProject);
 
@@ -189,36 +208,6 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
-// ============================================================
-// Feature detection
-// ============================================================
-
-function _checkUrlChanged() {
-  if (state.scrolling) return;
-  chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-    if (!tabs.length) return;
-    var url = (tabs[0].url || '').split('#')[0];
-    if (url !== state.lastUrl) {
-      state.lastUrl = url;
-      detectFeatureDoc();
-    }
-  });
-}
-
-function detectFeatureDoc() {
-  chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-    if (!tabs.length) return;
-    var tab = tabs[0];
-
-    // Detect current context
-    var match = (tab.title || '').match(/^F(\d+)\s+/i);
-    state.featureId = match ? 'F' + match[1] : null;
-    state.onSpreadsheet = (tab.title || '').indexOf('Tenmen Tasks') !== -1 ||
-      ((tab.url || '').indexOf('spreadsheets') !== -1 && (tab.title || '').indexOf('Tenmen') !== -1);
-
-    fetchAllPatches();
-  });
-}
 
 // ============================================================
 // API calls (routed through background.js)
@@ -257,7 +246,7 @@ function apiPost(url, body, callback) {
 // ============================================================
 
 function fetchAllPatches() {
-  if (state.showingSettings) return;
+  if (state.activeView !== 'patches') return;
   if (state.fetching) return;
   if (!state.webAppUrl) {
     document.getElementById('config-bar').style.display = 'block';
@@ -272,7 +261,6 @@ function fetchAllPatches() {
   document.getElementById('patch-list').innerHTML = '';
   document.getElementById('all-done').style.display = 'none';
   document.getElementById('source-section').style.display = 'none';
-  document.getElementById('feature-docs-section').style.display = 'none';
 
   state.fetching = true;
   var url = state.webAppUrl + '?action=list_patches';
@@ -281,7 +269,7 @@ function fetchAllPatches() {
     state.hasFetchedOnce = true;
     document.getElementById('loading').style.display = 'none';
     _resetReloadBtn();
-    if (state.showingSettings) return;
+    if (state.activeView !== 'patches') return;
 
     if (!response || !response.ok) {
       var debugEl = document.getElementById('debug-output');
@@ -289,52 +277,28 @@ function fetchAllPatches() {
       if (response && response.error) errSteps.push(response.error);
       if (response && response.raw) errSteps.push(response.raw);
       _showDebugCard(debugEl, 'Error', errSteps);
-      document.getElementById('actions-panel').style.display = 'block';
       return;
     }
 
     var allPatches = response.data.patches || [];
     if (!allPatches.length) {
-      setStatus('No patches... to generate a new one drop a Meeting Summary in the transcripts directory in the Drive', 'empty');
-      document.getElementById('actions-panel').style.display = 'block';
+      setStatus('No patches available', 'empty');
       return;
     }
 
     document.getElementById('status-bar').style.display = 'none';
 
-    // The list is sorted oldest first — take the oldest patch
-    // Then find all patches from the same source (same date/sequence prefix)
-    var oldest = allPatches[0];
-    var oldestDateSeq = oldest.patchId.replace(/^F\d+-/, ''); // e.g. "patch-20260402-1"
-
-    // Group all patches that share the same date-sequence (same meeting source)
-    state.patchGroup = allPatches.filter(function(p) {
-      return p.patchId.replace(/^F\d+-/, '') === oldestDateSeq;
+    // Sort: feature doc patches first, then task patches, oldest first within each type
+    allPatches.sort(function(a, b) {
+      var aTask = a.patchType === 'task' ? 1 : 0;
+      var bTask = b.patchType === 'task' ? 1 : 0;
+      if (aTask !== bTask) return aTask - bTask;
+      return 0; // preserve server order (oldest first)
     });
 
-    // Show loading if we're likely on a matching page
-    var mightMatch = state.patchGroup.some(function(p) {
-      return (state.featureId && p.featureId === state.featureId) || state.onSpreadsheet;
-    });
-    if (mightMatch) {
-      document.getElementById('loading').style.display = 'block';
-      document.getElementById('actions-panel').style.display = 'none';
-    }
-
-    // Load each patch in the group to get full data
+    state.allPatches = allPatches;
     state.loadedPatches = {};
-    var toLoad = state.patchGroup.length;
-    var loaded = 0;
-
-    state.patchGroup.forEach(function(patchInfo) {
-      loadPatch(patchInfo, function() {
-        loaded++;
-        if (loaded === toLoad) {
-          document.getElementById('loading').style.display = 'none';
-          renderPatchGroup();
-        }
-      });
-    });
+    renderPatchIndex();
   });
 }
 
@@ -351,125 +315,165 @@ function loadPatch(patchInfo, callback) {
   });
 }
 
-function renderPatchGroup() {
-  if (state.showingSettings) return;
-  var container = document.getElementById('patch-list');
-  container.innerHTML = '';
+function renderPatchIndex() {
+  if (state.activeView !== 'patches') return;
 
-  // Get source name from the first loaded patch
-  var firstPatch = null;
-  var featureIds = [];
-  state.patchGroup.forEach(function(p) {
-    var loaded = state.loadedPatches[p.patchId];
-    if (loaded) {
-      if (!firstPatch) firstPatch = loaded;
-      featureIds.push(p.featureId);
-    }
-  });
+  document.getElementById('source-section').style.display = 'none';
+  document.getElementById('patch-list').innerHTML = '';
+  document.getElementById('patch-back').style.display = 'none';
+  document.getElementById('view-tabs').style.display = '';
+  var indexContainer = document.getElementById('patch-index');
+  indexContainer.innerHTML = '';
 
-  if (!firstPatch) {
-    setStatus('Error loading patch data', 'error');
+  var patches = state.allPatches || [];
+  if (!patches.length) {
+    setStatus('No patches available', 'empty');
     return;
   }
 
-  // Check if current page is one of the addressed feature docs (only match feature doc patches, not task patches)
-  var currentPatchData = null;
-  var currentPatchInfo = null;
-  if (state.featureId) {
-    state.patchGroup.forEach(function(p) {
-      if (p.featureId === state.featureId && state.loadedPatches[p.patchId]) {
-        var loaded = state.loadedPatches[p.patchId];
-        if (loaded.data.patchType !== 'task') {
-          currentPatchData = loaded.data;
-          currentPatchInfo = loaded.info;
-        }
-      }
+  patches.forEach(function(p) {
+    var isTask = p.patchType === 'task';
+    var targetName = p.targetDocName || (isTask ? 'Tenmen Tasks' : p.featureId);
+    var targetUrl = p.targetDocUrl || p.targetSpreadsheetUrl || '';
+    var sourceName = p.sourceFileName || 'Unknown';
+
+    var card = document.createElement('div');
+    card.className = 'patch-index-card';
+
+    var reviewBtn = document.createElement('button');
+    reviewBtn.className = 'patch-index-review';
+    reviewBtn.textContent = 'Review ' + targetName + ' Patch';
+    reviewBtn.addEventListener('click', (function(patchInfo, docUrl) {
+      return function() { openPatchDetail(patchInfo, docUrl); };
+    })(p, targetUrl));
+    card.appendChild(reviewBtn);
+
+    var sourceLabel = document.createElement('div');
+    sourceLabel.className = 'section-label';
+    sourceLabel.style.marginTop = '8px';
+    sourceLabel.textContent = 'Based on';
+    card.appendChild(sourceLabel);
+
+    if (p.sourceFileUrl) {
+      var sourceLink = document.createElement('a');
+      sourceLink.className = 'feature-doc-link';
+      sourceLink.href = p.sourceFileUrl;
+      sourceLink.target = '_blank';
+      sourceLink.textContent = sourceName;
+      card.appendChild(sourceLink);
+    } else {
+      var sourceSpan = document.createElement('span');
+      sourceSpan.className = 'feature-doc-link';
+      sourceSpan.textContent = sourceName;
+      card.appendChild(sourceSpan);
+    }
+
+    var footer = document.createElement('div');
+    footer.className = 'patch-index-footer';
+
+    var meta = document.createElement('span');
+    meta.className = 'patch-index-meta';
+    meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending';
+    footer.appendChild(meta);
+
+    var deleteBtn = document.createElement('button');
+    deleteBtn.className = 'patch-index-delete';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', (function(patchId, cardEl) {
+      return function(e) {
+        e.stopPropagation();
+        if (!confirm('Delete this patch?')) return;
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = 'Deleting...';
+        apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
+          if (response && response.ok && response.data && response.data.success) {
+            cardEl.remove();
+            state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
+            delete state.loadedPatches[patchId];
+          } else {
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = 'Delete';
+          }
+        });
+      };
+    })(p.patchId, card));
+    footer.appendChild(deleteBtn);
+    card.appendChild(footer);
+
+    indexContainer.appendChild(card);
+  });
+}
+
+function openPatchDetail(patchInfo, docUrl) {
+  // Open the target document in the current tab
+  if (docUrl) {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+      if (tabs.length) chrome.tabs.update(tabs[0].id, { url: docUrl });
     });
   }
 
-  var sourceSection = document.getElementById('source-section');
-  var featureDocsSection = document.getElementById('feature-docs-section');
-  var featureDocsList = document.getElementById('feature-docs-list');
-  featureDocsList.innerHTML = '';
+  // Hide tabs, show back button
+  document.getElementById('view-tabs').style.display = 'none';
+  document.getElementById('patch-back').style.display = 'block';
+  document.getElementById('patch-index').innerHTML = '';
+  document.getElementById('status-bar').style.display = 'none';
 
-  // Also check for task patches when on the spreadsheet
-  var currentTaskPatchData = null;
-  var currentTaskPatchInfo = null;
-  if (state.onSpreadsheet) {
-    state.patchGroup.forEach(function(p) {
-      var loaded = state.loadedPatches[p.patchId];
-      if (loaded && loaded.data.patchType === 'task') {
-        currentTaskPatchData = loaded.data;
-        currentTaskPatchInfo = loaded.info;
-      }
-    });
-  }
-
-  if (currentPatchData) {
-    // On the feature doc — show feature doc patch
-    var sourceLabel = document.querySelector('#source-section .section-label');
-    if (sourceLabel) sourceLabel.textContent = 'Meeting Summary';
-    var sourceHeader = document.getElementById('source-header');
-    var sourceName = firstPatch.data.sourceFileName || '';
-    if (sourceName) {
-      if (firstPatch.data.sourceFileUrl) {
-        sourceHeader.innerHTML = '<a href="' + escapeHtml(firstPatch.data.sourceFileUrl) + '" target="_blank">' + escapeHtml(sourceName) + '</a>';
-      } else {
-        sourceHeader.textContent = sourceName;
-      }
-      sourceSection.style.display = 'block';
-    }
-    featureDocsSection.style.display = 'none';
-    document.getElementById('actions-panel').style.display = 'none';
-    state.currentPatch = currentPatchData;
-    renderPatch(currentPatchInfo, currentPatchData);
-  } else if (currentTaskPatchData) {
-    // On the spreadsheet — show task patch with feature doc as source
-    var sourceLabel = document.querySelector('#source-section .section-label');
-    if (sourceLabel) sourceLabel.textContent = 'Feature Document';
-    var sourceHeader2 = document.getElementById('source-header');
-    var sourceName2 = currentTaskPatchData.sourceFileName || '';
-    if (sourceName2) {
-      if (currentTaskPatchData.sourceFileUrl) {
-        sourceHeader2.innerHTML = '<a href="' + escapeHtml(currentTaskPatchData.sourceFileUrl) + '" target="_blank">' + escapeHtml(sourceName2) + '</a>';
-      } else {
-        sourceHeader2.textContent = sourceName2;
-      }
-      sourceSection.style.display = 'block';
-    }
-    featureDocsSection.style.display = 'none';
-    document.getElementById('actions-panel').style.display = 'none';
-    state.currentPatch = currentTaskPatchData;
-    renderTaskPatch(currentTaskPatchInfo, currentTaskPatchData);
+  // Load full patch data and render
+  if (state.loadedPatches[patchInfo.patchId]) {
+    _renderDetailedPatch(state.loadedPatches[patchInfo.patchId]);
   } else {
-    // Not on a matching page — show links
-    sourceSection.style.display = 'none';
-
-    featureIds.forEach(function(fId) {
-      var loaded = null;
-      state.patchGroup.forEach(function(p) {
-        if (p.featureId === fId && state.loadedPatches[p.patchId]) {
-          loaded = state.loadedPatches[p.patchId];
-        }
-      });
-
-      // Show link to feature doc or spreadsheet depending on patch type
-      var targetUrl = loaded ? (loaded.data.targetDocUrl || loaded.data.targetSpreadsheetUrl) : '';
-      var targetName = loaded ? (loaded.data.targetDocName || 'Tenmen Tasks') : '';
-
-      if (loaded && targetUrl) {
-        var link = document.createElement('a');
-        link.className = 'feature-doc-link';
-        link.href = targetUrl;
-        link.target = '_blank';
-        link.textContent = targetName;
-        featureDocsList.appendChild(link);
-      }
+    document.getElementById('loading').style.display = 'block';
+    loadPatch(patchInfo, function() {
+      document.getElementById('loading').style.display = 'none';
+      var loaded = state.loadedPatches[patchInfo.patchId];
+      if (loaded) _renderDetailedPatch(loaded);
     });
-
-    featureDocsSection.style.display = featureDocsList.children.length > 0 ? 'block' : 'none';
-    document.getElementById('actions-panel').style.display = 'block';
   }
+}
+
+function _renderDetailedPatch(loaded) {
+  var data = loaded.data;
+  var isTask = data.patchType === 'task';
+  var sourceSection = document.getElementById('source-section');
+  var sourceLabel = document.querySelector('#source-section .section-label');
+  if (sourceLabel) sourceLabel.textContent = isTask ? 'Feature Document' : 'Meeting Summary';
+  var sourceHeader = document.getElementById('source-header');
+  var sourceName = data.sourceFileName || '';
+  if (sourceName) {
+    if (data.sourceFileUrl) {
+      sourceHeader.innerHTML = '<a href="' + escapeHtml(data.sourceFileUrl) + '" target="_blank">' + escapeHtml(sourceName) + '</a>';
+    } else {
+      sourceHeader.textContent = sourceName;
+    }
+    sourceSection.style.display = 'block';
+  }
+  state.currentPatch = data;
+  if (isTask) {
+    renderTaskPatch(loaded.info, data);
+  } else {
+    renderPatch(loaded.info, data);
+  }
+}
+
+function backToPatchIndex() {
+  document.getElementById('patch-list').innerHTML = '';
+  document.getElementById('source-section').style.display = 'none';
+  state.currentPatch = null;
+
+  // Update allPatches from local cache — recalculate counts, remove fully resolved
+  if (state.allPatches) {
+    state.allPatches = state.allPatches.filter(function(p) {
+      var loaded = state.loadedPatches[p.patchId];
+      if (!loaded) return true;
+      var ops = loaded.data.operations || [];
+      var pending = ops.filter(function(op) { return !op._applied && !op._dismissed; }).length;
+      p.pendingCount = pending;
+      p.operationCount = ops.length;
+      return pending > 0;
+    });
+  }
+
+  renderPatchIndex();
 }
 
 // ============================================================
@@ -840,24 +844,35 @@ function buildDiffHtml(op) {
   var type = op.type;
 
   // Story-level operations (new format)
-  if (type === 'update' && op.proposedText) {
+  var text = op.proposedText || op.new_text || op.text || '';
+  var currentText = op.currentText || op.match_text || '';
+
+  if (type === 'update' && text) {
     // For updates, the diff is computed asynchronously with live text — show proposed as fallback
-    var lines = op.proposedText.split('\n');
+    var lines = text.split('\n');
     html = lines.map(function(line) {
       return '<div class="diff-line">' + escapeHtml(line || ' ') + '</div>';
     }).join('');
-  } else if (type === 'create' && op.proposedText) {
+  } else if (type === 'create' && text) {
     // All new — show entirely in green
-    var lines = op.proposedText.split('\n');
+    var lines = text.split('\n');
     html = lines.map(function(line) {
       return '<div class="diff-add">' + escapeHtml(line || ' ') + '</div>';
     }).join('');
-  } else if (type === 'delete' && op.currentText) {
+  } else if (type === 'delete' && currentText) {
     // All removed — show entirely in red strikethrough
-    var lines = op.currentText.split('\n');
+    var lines = currentText.split('\n');
     html = lines.map(function(line) {
       return '<div class="diff-del">' + escapeHtml(line || ' ') + '</div>';
     }).join('');
+  }
+  // No content available — show what we know
+  else if (!html) {
+    var desc = type ? type.toUpperCase() : 'UNKNOWN';
+    if (op.storyId) desc += ' — ' + op.storyId;
+    if (op.storyTitle) desc += ': ' + op.storyTitle;
+    if (op.reason) desc += ' (' + op.reason + ')';
+    html = '<div class="diff-line" style="color:#5f6368;font-style:italic;">' + escapeHtml(desc || 'Empty operation') + '</div>';
   }
   // Legacy operation types
   else if (type === 'replace_text') {
@@ -886,6 +901,7 @@ function buildDiffHtml(op) {
 function applyOperation(patchId, operationIndex, opDiv, btn, op) {
   btn.disabled = true;
   btn.textContent = 'Applying...';
+  opDiv.style.opacity = '0.4';
   // Disable dismiss button while applying
   var dismissBtn = opDiv.querySelector('.btn-dismiss');
   if (dismissBtn) dismissBtn.disabled = true;
@@ -895,31 +911,88 @@ function applyOperation(patchId, operationIndex, opDiv, btn, op) {
     patchId: patchId,
     operationIndex: operationIndex,
   }, function(response) {
-    if (response && response.ok && response.data.success) {
+    console.log('apply_operation response:', JSON.stringify(response));
+    var success = response && response.ok && response.data && response.data.success;
+    if (success) {
+      var loaded = state.loadedPatches[patchId];
+      if (loaded && loaded.data && loaded.data.operations && loaded.data.operations[operationIndex]) {
+        loaded.data.operations[operationIndex]._applied = true;
+      }
       opDiv.style.display = 'none';
       checkAllDone();
-      // Scroll to the story where the change was applied
-      var storyMatch = (op && op.location || '').match(/F\d+S\d+/i);
-      if (storyMatch) {
-        scrollToStory(storyMatch[0]);
-      }
+      return;
+    }
+
+    // Apply failed — show error with Apply Anyway and Dismiss
+    opDiv.style.opacity = '';
+    var err = (response && response.data && response.data.error)
+      || (response && response.error)
+      || 'Apply failed';
+    console.log('apply error:', err);
+    _showApplyError(opDiv, patchId, operationIndex, op, err);
+  });
+}
+
+function _showApplyError(opDiv, patchId, operationIndex, op, err) {
+  // Hide the original action buttons
+  var origActions = opDiv.querySelector('.op-actions');
+  if (origActions) origActions.style.display = 'none';
+  // Remove any previous error block
+  var prev = opDiv.querySelector('.op-error-block');
+  if (prev) prev.remove();
+
+  var block = document.createElement('div');
+  block.className = 'op-error-block';
+
+  var errorEl = document.createElement('div');
+  errorEl.className = 'debug-output';
+  errorEl.style.margin = '0';
+  _showDebugCard(errorEl, 'Apply failed', [err]);
+  block.appendChild(errorEl);
+
+  var btnRow = document.createElement('div');
+  btnRow.className = 'op-actions';
+  btnRow.style.marginTop = '6px';
+
+  var forceBtn = document.createElement('button');
+  forceBtn.className = 'btn-apply';
+  forceBtn.textContent = 'Apply Anyway';
+  forceBtn.addEventListener('click', function() {
+    block.remove();
+    forceApplyOperation(patchId, operationIndex, opDiv, op);
+  });
+  btnRow.appendChild(forceBtn);
+
+  var dismissBtn = document.createElement('button');
+  dismissBtn.className = 'btn-dismiss';
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.addEventListener('click', function() {
+    dismissOperation(patchId, operationIndex, opDiv, dismissBtn);
+  });
+  btnRow.appendChild(dismissBtn);
+
+  block.appendChild(btnRow);
+  opDiv.appendChild(block);
+}
+
+function forceApplyOperation(patchId, operationIndex, opDiv, op) {
+  opDiv.style.opacity = '0.4';
+  apiPost(state.webAppUrl, {
+    action: 'apply_operation',
+    patchId: patchId,
+    operationIndex: operationIndex,
+    force: true,
+  }, function(response) {
+    var success = response && response.ok && response.data && response.data.success;
+    if (success) {
+      opDiv.style.display = 'none';
+      checkAllDone();
     } else {
-      // Fade out the diff and show friendly error with dismiss option
-      var diffEl = opDiv.querySelector('.op-diff');
-      if (diffEl) diffEl.style.opacity = '0.3';
-      var actionsEl = opDiv.querySelector('.op-actions');
-      actionsEl.innerHTML = '';
-      var errorSpan = document.createElement('span');
-      errorSpan.className = 'op-status not-found';
-      errorSpan.textContent = 'Text not found in document';
-      actionsEl.appendChild(errorSpan);
-      var dismissBtn2 = document.createElement('button');
-      dismissBtn2.className = 'btn-dismiss';
-      dismissBtn2.textContent = 'Dismiss';
-      dismissBtn2.addEventListener('click', function() {
-        dismissOperation(patchId, operationIndex, opDiv, dismissBtn2);
-      });
-      actionsEl.appendChild(dismissBtn2);
+      opDiv.style.opacity = '';
+      var err = (response && response.data && response.data.error)
+        || (response && response.error)
+        || 'Force apply failed';
+      _showApplyError(opDiv, patchId, operationIndex, op, err);
     }
   });
 }
@@ -931,6 +1004,12 @@ function dismissOperation(patchId, operationIndex, opDiv, btn) {
     opDiv.style.display = 'none';
     checkAllDone();
   }, 300);
+
+  // Update local cache
+  var loaded = state.loadedPatches[patchId];
+  if (loaded && loaded.data && loaded.data.operations && loaded.data.operations[operationIndex]) {
+    loaded.data.operations[operationIndex]._dismissed = true;
+  }
 
   // Fire API call in background
   apiPost(state.webAppUrl, {
@@ -1024,27 +1103,11 @@ function scrollToStory(storyId) {
 // Settings
 // ============================================================
 
-function showSettings() {
-  state.showingSettings = true;
-  // Hide everything else
-  document.getElementById('actions-panel').style.display = 'none';
-  document.getElementById('status-bar').style.display = 'none';
-  document.getElementById('source-section').style.display = 'none';
-  document.getElementById('feature-docs-section').style.display = 'none';
-  document.getElementById('patch-list').innerHTML = '';
-  document.getElementById('all-done').style.display = 'none';
+function loadSettings() {
   document.getElementById('settings-message').style.display = 'none';
-  document.getElementById('debug-output').style.display = 'none';
-  document.getElementById('loading').style.display = 'none';
-
-  // Show settings panel with loading state
-  document.getElementById('settings-panel').style.display = 'block';
   _setSettingsInputsEnabled(false);
-  document.getElementById('loading').style.display = 'block';
 
-  // Load current config
   apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
-    document.getElementById('loading').style.display = 'none';
     _setSettingsInputsEnabled(true);
     if (response && response.ok && response.data) {
       var d = response.data;
@@ -1053,6 +1116,40 @@ function showSettings() {
       document.getElementById('setting-api-key').value = d.API_KEY || '';
       _renderProjectSettings(d.PROJECTS || [], d.projectConfigs || {});
     }
+  });
+
+  _refreshActivityLog();
+  // Auto-refresh while on settings tab
+  if (state._activityInterval) clearInterval(state._activityInterval);
+  state._activityInterval = setInterval(function() {
+    if (state.activeView !== 'settings') {
+      clearInterval(state._activityInterval);
+      state._activityInterval = null;
+      return;
+    }
+    _refreshActivityLog();
+  }, 15000);
+}
+
+function _refreshActivityLog() {
+  apiGet(state.webAppUrl + '?action=get_activity_log', function(response) {
+    var container = document.getElementById('activity-log');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!response || !response.ok || !response.data) return;
+    var log = response.data.log || [];
+    if (!log.length) {
+      container.innerHTML = '<div style="color:#80868b;padding:4px 0;">No activity yet</div>';
+      return;
+    }
+    log.forEach(function(entry) {
+      var div = document.createElement('div');
+      div.className = 'activity-log-entry' + (entry.message.indexOf('Error') >= 0 ? ' error' : '');
+      var time = new Date(entry.time);
+      var timeStr = time.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      div.innerHTML = '<span class="activity-log-time">' + timeStr + '</span>' + escapeHtml(entry.message);
+      container.appendChild(div);
+    });
   });
 }
 
@@ -1078,7 +1175,7 @@ function _renderProjectSettings(projects, projectConfigs) {
         if (!confirm('Remove project "' + projectName + '"?')) return;
         apiPost(state.webAppUrl, { action: 'remove_project', projectName: projectName }, function(response) {
           if (response && response.ok && response.data && response.data.success) {
-            showSettings();
+            loadSettings();
           }
         });
       };
@@ -1100,7 +1197,6 @@ function _setSettingsInputsEnabled(enabled) {
   var inputs = document.querySelectorAll('.settings-panel input');
   inputs.forEach(function(inp) { inp.disabled = !enabled; });
   document.getElementById('btn-save-settings').disabled = !enabled;
-  document.getElementById('btn-cancel-settings').disabled = !enabled;
 }
 
 function saveSettings() {
@@ -1128,25 +1224,17 @@ function saveSettings() {
   };
 
   apiPost(state.webAppUrl, payload, function(response) {
+    _setSettingsInputsEnabled(true);
+    btn.textContent = 'Save';
     if (response && response.ok && response.data && response.data.success) {
       msgEl.textContent = response.data.message || 'Settings saved.';
       msgEl.className = 'settings-message success';
       msgEl.style.display = 'block';
-      // Return to main view after a moment
-      setTimeout(function() {
-        state.showingSettings = false;
-        document.getElementById('settings-panel').style.display = 'none';
-        _setSettingsInputsEnabled(true);
-        btn.textContent = 'Save';
-        detectFeatureDoc();
-      }, 1500);
     } else {
       var err = (response && response.data) ? response.data.error : (response ? response.error : 'Unknown error');
       msgEl.textContent = err;
       msgEl.className = 'settings-message error';
       msgEl.style.display = 'block';
-      _setSettingsInputsEnabled(true);
-      btn.textContent = 'Save';
     }
   });
 }
@@ -1168,7 +1256,7 @@ function addProject() {
     if (response && response.ok && response.data && response.data.success) {
       nameEl.value = '';
       driveEl.value = '';
-      showSettings();
+      loadSettings();
     } else {
       var msgEl = document.getElementById('settings-message');
       var err = (response && response.data) ? response.data.error : 'Failed to add project';
@@ -1184,8 +1272,7 @@ function checkConfigured() {
   if (!state.webAppUrl) return;
   apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
     if (response && response.ok && response.data && !response.data.configured) {
-      state.showingSettings = true;
-      showSettings();
+      switchView('settings');
     }
   });
 }
@@ -1199,11 +1286,16 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach(function(v) { v.style.display = 'none'; });
   document.querySelectorAll('.view-tab').forEach(function(t) { t.classList.remove('active'); });
   document.getElementById('view-' + name).style.display = '';
+  if (name !== 'patches') document.getElementById('status-bar').style.display = 'none';
   var tab = document.querySelector('[data-view="' + name + '"]');
   if (tab) tab.classList.add('active');
 
   if (name === 'tasks') {
     fetchTasks();
+  } else if (name === 'settings') {
+    loadSettings();
+  } else if (name === 'patches') {
+    fetchAllPatches();
   }
 }
 
@@ -1213,13 +1305,22 @@ function switchView(name) {
 
 function fetchTasks() {
   if (!state.webAppUrl) return;
-  document.getElementById('tasks-loading').style.display = 'block';
-  document.getElementById('task-list').innerHTML = '';
-  document.getElementById('tasks-empty').style.display = 'none';
 
+  // Show cached tasks immediately if available
+  if (state.cachedTasks) {
+    renderTaskList(state.cachedTasks);
+  } else {
+    document.getElementById('tasks-loading').style.display = 'block';
+    document.getElementById('task-list').innerHTML = '';
+    document.getElementById('tasks-empty').style.display = 'none';
+  }
+
+  // Fetch fresh data in the background
   apiGet(state.webAppUrl + '?action=list_tasks', function(response) {
     document.getElementById('tasks-loading').style.display = 'none';
+    if (state.activeView !== 'tasks') return;
     if (!response || !response.ok || !response.data || response.data.error) {
+      if (state.cachedTasks) return; // keep showing cached data on refresh error
       var errSteps = ['Failed to load tasks'];
       if (response && response.error) errSteps.push(response.error);
       if (response && response.raw) errSteps.push(response.raw);
@@ -1230,11 +1331,14 @@ function fetchTasks() {
       return;
     }
     var tasks = response.data.tasks || [];
+    state.cachedTasks = tasks;
     if (!tasks.length) {
+      document.getElementById('task-list').innerHTML = '';
       document.getElementById('tasks-empty').textContent = 'No tasks found';
       document.getElementById('tasks-empty').style.display = 'block';
       return;
     }
+    document.getElementById('tasks-empty').style.display = 'none';
     renderTaskList(tasks);
   });
 }
@@ -1274,6 +1378,7 @@ function setStatus(text, type) {
   var bar = document.getElementById('status-bar');
   bar.textContent = text;
   bar.className = 'status-bar' + (type ? ' ' + type : '');
+  bar.style.display = (state.activeView === 'patches') ? '' : 'none';
 }
 
 function checkAllDone() {
@@ -1294,10 +1399,9 @@ function checkAllDone() {
   });
 
   if (visibleCount === 0 && ops.length) {
-    // All patches reviewed — fetch to see if there are more
+    // All patches reviewed — back to index
     setTimeout(function() {
-      state.lastUrl = null;
-      fetchAllPatches();
+      backToPatchIndex();
     }, 1000);
   }
 }
@@ -1525,7 +1629,7 @@ function _resetReloadBtn() {
 
 function _showDebugCard(el, title, steps) {
   el.innerHTML = '<div class="debug-header"><span>' + escapeHtml(title) + '</span>'
-    + '<button class="debug-dismiss" id="debug-dismiss-btn">Dismiss</button></div>'
+    + '<button class="debug-dismiss">Dismiss</button></div>'
     + '<div class="debug-steps">'
     + steps.map(function(s) {
         var cls = (s.indexOf('ERROR') === 0 || s.indexOf('error') === 0 || s.indexOf('Connection') === 0) ? 'debug-step error' : 'debug-step';
@@ -1533,7 +1637,7 @@ function _showDebugCard(el, title, steps) {
       }).join('')
     + '</div>';
   el.style.display = 'block';
-  document.getElementById('debug-dismiss-btn').addEventListener('click', function() {
+  el.querySelector('.debug-dismiss').addEventListener('click', function() {
     el.style.display = 'none';
   });
 }

@@ -14,35 +14,25 @@
   <nav class="view-tabs" id="view-tabs" style="display:none;">
     <button class="view-tab active" data-view="patches">Patches</button>
     <button class="view-tab" data-view="tasks">Tasks</button>
+    <button class="view-tab" data-view="settings">Settings</button>
   </nav>
 
   <div class="status-bar" id="status-bar"></div>
 
   <!-- Patches view -->
   <div class="view" id="view-patches">
+    <div class="patch-back" id="patch-back" style="display:none;">
+      <button class="patch-back-btn" id="btn-patch-back">&larr; Back to patches</button>
+    </div>
     <div class="section-header" id="source-section" style="display:none;">
       <div class="section-label">Meeting Summary</div>
       <div class="section-link" id="source-header"></div>
     </div>
 
-    <div class="feature-docs-section" id="feature-docs-section" style="display:none;">
-      <div class="section-label">Review Patch For</div>
-      <div class="feature-docs-list" id="feature-docs-list"></div>
-    </div>
-
-    <div class="actions-panel" id="actions-panel" style="display:none;">
-      <button class="action-btn" id="btn-reload">Fetch Patches</button>
-      <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
-      <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
-      <button class="action-btn" id="btn-open-spreadsheet">Open Task Spreadsheet</button>
-      <button class="action-btn" id="btn-open-drive">Open Drive</button>
-      <button class="action-btn" id="btn-settings">Settings</button>
-      <div class="debug-output" id="debug-output" style="display:none;"></div>
-    </div>
-
     <div id="content">
       <div class="loading" id="loading" style="display:none;">Loading Patches...</div>
       <div class="patch-list" id="patch-list"></div>
+      <div id="patch-index"></div>
       <div class="all-done" id="all-done" style="display:none;">All patches reviewed</div>
     </div>
   </div>
@@ -54,39 +44,52 @@
     <div class="all-done" id="tasks-empty" style="display:none;">No tasks found</div>
   </div>
 
-  <!-- Settings overlay -->
-  <div class="settings-panel" id="settings-panel" style="display:none;">
-    <div class="section-label">Settings</div>
-    <div class="settings-field">
-      <label>Gemini API Key</label>
-      <input type="text" id="setting-gemini-key" placeholder="AIza...">
+  <!-- Settings view -->
+  <div class="view" id="view-settings" style="display:none;">
+    <div class="actions-panel" id="actions-panel">
+      <button class="action-btn" id="btn-reload">Fetch Patches</button>
+      <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
+      <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
+      <div class="debug-output" id="debug-output" style="display:none;"></div>
     </div>
-    <div class="settings-field">
-      <label>Gemini Model</label>
-      <input type="text" id="setting-gemini-model" placeholder="gemini-3-pro-preview">
-    </div>
-    <div class="settings-field">
-      <label>API Key (for external access)</label>
-      <input type="text" id="setting-api-key" placeholder="Optional — protects task endpoints">
-    </div>
-    <div class="section-label" style="margin-top:14px;">Projects</div>
-    <div id="settings-projects"></div>
-    <div id="add-project-form" style="margin-top:8px;">
+
+    <div class="settings-panel" id="settings-panel">
+      <div class="section-label">Settings</div>
       <div class="settings-field">
-        <label>Project Name</label>
-        <input type="text" id="add-project-name" placeholder="my-project">
+        <label>Gemini API Key</label>
+        <input type="text" id="setting-gemini-key" placeholder="AIza...">
       </div>
       <div class="settings-field">
-        <label>Shared Drive ID</label>
-        <input type="text" id="add-project-drive-id" placeholder="0ABcDeFgHiJk...">
+        <label>Gemini Model</label>
+        <input type="text" id="setting-gemini-model" placeholder="gemini-3-pro-preview">
       </div>
-      <button class="action-btn" id="btn-add-project" style="margin-bottom:12px;">Add Project</button>
+      <div class="settings-field">
+        <label>API Key (for external access)</label>
+        <input type="text" id="setting-api-key" placeholder="Optional — protects task endpoints">
+      </div>
+      <div class="section-label" style="margin-top:14px;">Projects</div>
+      <div id="settings-projects"></div>
+      <div id="add-project-form" style="margin-top:8px;">
+        <div class="settings-field">
+          <label>Project Name</label>
+          <input type="text" id="add-project-name" placeholder="my-project">
+        </div>
+        <div class="settings-field">
+          <label>Shared Drive ID</label>
+          <input type="text" id="add-project-drive-id" placeholder="0ABcDeFgHiJk...">
+        </div>
+        <button class="action-btn" id="btn-add-project" style="margin-bottom:12px;">Add Project</button>
+      </div>
+      <div class="settings-actions">
+        <button class="action-btn" id="btn-save-settings">Save</button>
+      </div>
+      <div class="settings-message" id="settings-message" style="display:none;"></div>
     </div>
-    <div class="settings-actions">
-      <button class="action-btn" id="btn-save-settings">Save</button>
-      <button class="action-btn settings-cancel" id="btn-cancel-settings">Cancel</button>
+
+    <div class="activity-log-section">
+      <div class="section-label" style="margin-top:14px;">Activity Log</div>
+      <div id="activity-log" class="activity-log"></div>
     </div>
-    <div class="settings-message" id="settings-message" style="display:none;"></div>
   </div>
 
   <script src="sidepanel.js"></script>

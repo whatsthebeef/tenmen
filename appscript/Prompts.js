@@ -2,6 +2,30 @@
 // Prompt templates — edit these to tune AI proposals
 // ============================================================
 
+// Shared user story format definition — used across prompts
+function _storyFormatBlock(featureId) {
+  return 'USER STORY FORMAT:\n' +
+    '- Line 1 (H3 heading, bold): Story ID + period + full user story text on one line.\n' +
+    '  Example: "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials."\n' +
+    '- Immediately following lines (NO blank line after heading): acceptance criteria, each on its own line, prefixed with a letter.\n' +
+    '  Example: "A. Editable Support Document versions must allow editing of existing cards"\n' +
+    '- NO blank lines anywhere within a story — not after the heading, not between criteria.\n' +
+    '- Acceptance criteria are prefixed with a LETTER (A., B., C., etc.), NEVER numbers.\n' +
+    '- Acceptance criteria can contain continuous text including lists and nested lists.\n' +
+    '- A blank line separates one story from the next story.\n' +
+    '\n' +
+    'Example of two complete stories:\n' +
+    featureId + 'S1. Teacher wants to view a Support Document so they can reference instructional material.\n' +
+    'A. Support Documents display all cards in order\n' +
+    'B. Each card shows its title and content\n' +
+    'C. Teacher can scroll through all cards\n' +
+    '\n' +
+    featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\n' +
+    'A. Editable Support Document versions must allow editing of existing cards\n' +
+    'B. Teachers must not be able to reorder cards\n' +
+    'C. Teachers can delete cards through card details';
+}
+
 function getUserStoryProposalPrompt(summaryContent, userStoryContent, featureId) {
   return `You are a project management assistant. A meeting has taken place and an AI-generated summary of the meeting has been provided. Your job is to analyze the meeting summary alongside the existing feature document and propose updates to the feature document.
 
@@ -76,6 +100,8 @@ IMPORTANT rules for the response:
 - "proposed" must follow the LANGUAGE RULES above (succinct, declarative, no meeting references)
 - "source" should quote or reference the specific part of the meeting summary
 - "proposedDocument" must be the COMPLETE document with ALL changes applied as clean text
+- "proposedDocument" MUST follow this format:
+${_storyFormatBlock(featureId)}
 - For "added" changes, "original" is null
 - For "removed" changes, "proposed" is null
 
@@ -407,16 +433,12 @@ function getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments) 
     '\n' +
     '\n"proposedText" must be PLAIN TEXT, NOT JSON. Do NOT include JSON fields like "id", "story_text", "acceptance_criteria", "startIndex".' +
     '\nWrite it exactly as it should appear in the document.' +
+    '\nDo NOT include a separate "Acceptance Criteria" heading line — the criteria follow directly after the story heading.' +
     '\n' +
-    '\nDocument format:' +
-    '\n- Line 1 (H3 heading, bold): Story ID + period + user story text, all on one line. Example: "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials."' +
-    '\n- Line 2: blank line (empty line after the heading)' +
-    '\n- Following lines: acceptance criteria, each on its own line, prefixed with a letter. Example: "A. Editable Support Document versions must allow editing of existing cards"' +
-    '\n- Each acceptance criterion is separated by a blank line.' +
-    '\n- Do NOT include a separate "Acceptance Criteria" heading line — the criteria follow directly after the blank line below the heading.' +
+    '\n' + _storyFormatBlock(featureId) +
     '\n' +
-    '\nExample proposedText (note the \\n\\n for blank lines):' +
-    '\n"' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\n\\nA. Editable Support Document versions must allow editing of existing cards\\n\\nB. Editable Support Document versions must not allow adding new cards\\n\\nC. Teachers must not be able to reorder cards"' +
+    '\nExample proposedText (note: single \\n between lines, NO double \\n, NO blank lines within a story):' +
+    '\n"' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\nA. Editable Support Document versions must allow editing of existing cards\\nB. Editable Support Document versions must not allow adding new cards\\nC. Teachers must not be able to reorder cards"' +
     '\n' +
     '\nReturn JSON:' +
     '\n{' +
@@ -425,7 +447,7 @@ function getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments) 
     '\n      "type": "update",' +
     '\n      "storyId": "' + featureId + 'S2",' +
     '\n      "storyTitle": "Teacher wants to edit a Support Document version so they can customize instructional materials.",' +
-    '\n      "proposedText": "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\n\\nA. Editable Support Document versions must allow editing of existing cards\\n\\nB. Editable Support Document versions must not allow adding new cards\\n\\nC. Teachers must not be able to reorder cards\\n\\nD. Teachers can delete cards through card details",' +
+    '\n      "proposedText": "' + featureId + 'S2. Teacher wants to edit a Support Document version so they can customize instructional materials.\\nA. Editable Support Document versions must allow editing of existing cards\\nB. Editable Support Document versions must not allow adding new cards\\nC. Teachers must not be able to reorder cards\\nD. Teachers can delete cards through card details",' +
     '\n      "reason": "Added acceptance criterion D for card deletion per meeting discussion",' +
     '\n      "source": "Meeting section on document editing"' +
     '\n    },' +
@@ -433,7 +455,7 @@ function getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments) 
     '\n      "type": "create",' +
     '\n      "storyId": "' + featureId + 'S5",' +
     '\n      "storyTitle": "Teacher wants to export Support Documents so they can share materials outside the system.",' +
-    '\n      "proposedText": "' + featureId + 'S5. Teacher wants to export Support Documents so they can share materials outside the system.\\n\\nA. Teachers can export to PDF format\\n\\nB. Teachers can export to Word format",' +
+    '\n      "proposedText": "' + featureId + 'S5. Teacher wants to export Support Documents so they can share materials outside the system.\\nA. Teachers can export to PDF format\\nB. Teachers can export to Word format",' +
     '\n      "reason": "New requirement from meeting",' +
     '\n      "source": "Meeting section on exports"' +
     '\n    },' +
@@ -451,11 +473,13 @@ function getPatchPlanPrompt(normalizedDoc, meetingSummary, featureId, comments) 
     '\n- CRITICAL: For unchanged text, copy it CHARACTER FOR CHARACTER from the document. Do NOT change ANY words, even if you think a synonym is better. Do NOT change "visible" to "available", "must" to "should", "button" to "action", or any other synonym substitution. If the original says "Card details must not be visible" then the proposed text MUST say exactly "Card details must not be visible" — not "Card details must not be available" or any variation. The ONLY changes allowed are those directly warranted by the meeting summary.' +
     '\n- Only include operations for stories that are actually affected by the meeting summary.' +
     '\n- Do NOT include unchanged stories.' +
+    '\n- CRITICAL: Use "update" ONLY for stories that already exist in the CURRENT DOCUMENT. If the story ID does not appear in the current document, it is a NEW story and MUST use "create", not "update".' +
     '\n- RARELY add new stories or delete stories. Most changes are updates to acceptance criteria.' +
     '\n- LANGUAGE RULES: use succinct declarative language. No meeting references. No justification in criteria. Write as a product spec.' +
     '\n- Do NOT change story IDs or their format. Use the same ID format that exists in the document, even if it differs from the standard (e.g. keep TF1S2 if that is what the document uses).' +
     '\n- For new stories, assign the next available ID in the correct format.' +
-    '\n- Acceptance criteria MUST be prefixed with a LETTER (A., B., C., D., etc.), NOT numbers. Never use numbered prefixes like 1.1, 2.3, 3.5 for acceptance criteria.' +
+    '\n- Acceptance criteria MUST be prefixed with a LETTER (A., B., C., D., etc.), NOT numbers.' +
+    '\n- CRITICAL: proposedText must have NO blank lines within a story. Use single \\n between lines, NEVER \\n\\n.' +
     '\n' +
     '\nCONFIDENCE: Be generous with suggestions. If the meeting discussion implies a change even if not explicitly stated, suggest it. The reviewer can always dismiss suggestions they disagree with. It is better to over-suggest than to miss something. Do NOT use "uncertainties" — instead, generate the operation and let the reason explain the confidence level.' +
     '\n' +

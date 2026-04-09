@@ -66,8 +66,8 @@ Adding a project automatically creates:
 ### 7. Prepare your Shared Drive
 
 - Feature documents at the root, named with feature ID prefix: `F1 Feature Name`
-- Create a `transcripts` folder for meeting summaries (or let the system create it)
-- Drop meeting summaries into the `transcripts` folder
+- Create a `formulation` folder for meeting summaries (or let the system create it)
+- Drop meeting summaries into the `formulation` folder
 
 ## Deploying Changes
 
@@ -180,6 +180,6 @@ The deployment is stale. Run `./deploy.sh` to update it.
 ### Proposals not generating
 
 1. Check that feature docs are named with feature ID prefix (e.g. `F1 Feature Name`)
-2. Check that meeting summaries are in the `transcripts` folder
+2. Check that meeting summaries are in the `formulation` folder
 3. Check the execution logs for errors
 4. Try "Process Last Meeting Summary" from the extension actions panel

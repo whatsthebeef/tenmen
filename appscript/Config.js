@@ -5,9 +5,7 @@
 // Defaults for values that don't need user input
 var CONFIG_DEFAULTS = {
   GEMINI_MODEL: 'gemini-3-pro-preview',
-  TRANSCRIPTS_FOLDER_NAME: 'transcripts',
-  PROPOSALS_FOLDER_NAME: 'proposals',
-  ARCHIVE_FOLDER_NAME: 'archive',
+  FORMULATION_FOLDER_NAME: 'formulation',
   TECHNICAL_NOTES_FOLDER_NAME: 'technical_notes',
   PATCHES_FOLDER_NAME: 'patches',
   DEBOUNCE_MINUTES: '10',
@@ -114,6 +112,9 @@ function getApiKey() {
 }
 
 function _checkApiKey(key) {
+  // Authenticated Google users (e.g. Chrome extension) bypass the key check
+  var user = Session.getActiveUser().getEmail();
+  if (user) return true;
   var stored = getApiKey();
   if (!stored) return true;
   return key === stored;
@@ -171,14 +172,6 @@ function getSpreadsheetId() {
   return null;
 }
 
-function getProposalsFolderId() {
-  return findFolderByName(getSharedDriveId(), getConfigValue('PROPOSALS_FOLDER_NAME'));
-}
-
-function getArchiveFolderId() {
-  return findFolderByName(getSharedDriveId(), getConfigValue('ARCHIVE_FOLDER_NAME'));
-}
-
 function getPatchesFolderId() {
   return findFolderByName(getSharedDriveId(), getConfigValue('PATCHES_FOLDER_NAME'));
 }
@@ -198,4 +191,23 @@ function getLastRunTime() {
 
 function setLastRunTime(date) {
   setProp('LAST_RUN_TIME', date.toISOString());
+}
+
+// ============================================================
+// Activity log — recent events stored in a script property
+// ============================================================
+
+var MAX_ACTIVITY_LOG = 50;
+
+function logActivity(message) {
+  var log = getActivityLog();
+  log.unshift({ time: new Date().toISOString(), message: message });
+  if (log.length > MAX_ACTIVITY_LOG) log = log.slice(0, MAX_ACTIVITY_LOG);
+  setProp('ACTIVITY_LOG', JSON.stringify(log));
+}
+
+function getActivityLog() {
+  var val = getProp('ACTIVITY_LOG');
+  if (!val) return [];
+  try { return JSON.parse(val); } catch (e) { return []; }
 }

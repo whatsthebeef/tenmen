@@ -44,7 +44,7 @@ function applyPatchPlan(docId, patchPlan) {
 
   if (!requests.length) {
     Logger.log('No valid requests generated from operations');
-    return;
+    throw new Error('Text not found in document');
   }
 
   // Execute all requests in a single batch
@@ -216,14 +216,17 @@ function findStorySection(docId, storyId) {
     var namedStyle = style.namedStyleType || '';
     var isHeading = namedStyle.indexOf('HEADING') === 0;
 
+    var isH3 = namedStyle === 'HEADING_3';
+
     if (storyStart === -1) {
-      // Looking for the story heading
-      if (isHeading && storyPattern.test(text)) {
+      // Looking for the story heading (H3 only)
+      if (isH3 && storyPattern.test(text)) {
         storyStart = el.startIndex;
       }
     } else {
-      // Found the story, looking for the next heading (end of this story)
-      if (isHeading) {
+      // Found the story, looking for the next H3 heading (end of this story)
+      // Skip H4 and below — they are part of the current story (e.g. "Acceptance Criteria")
+      if (isH3) {
         storyEnd = el.startIndex;
         break;
       }
@@ -244,11 +247,38 @@ function findStorySection(docId, storyId) {
 /**
  * Apply a story-level update: delete the old story section and insert the new text.
  */
-function applyStoryUpdate(docId, storyId, proposedText) {
+function _readSectionText(docId, section) {
+  var doc = Docs.Documents.get(docId);
+  var content = doc.body.content || [];
+  var text = '';
+  for (var i = 0; i < content.length; i++) {
+    var el = content[i];
+    if (!el.paragraph) continue;
+    if (el.startIndex < section.startIndex) continue;
+    if (el.startIndex >= section.endIndex) break;
+    var paraText = _extractParagraphText(el.paragraph);
+    if (text) text += '\n';
+    text += paraText;
+  }
+  return text;
+}
+
+function _checkExpectedText(docId, section, expectedText) {
+  if (!expectedText) return;
+  var actual = _readSectionText(docId, section);
+  var normalize = function(s) { return (s || '').replace(/\s+/g, ' ').trim(); };
+  if (normalize(actual) !== normalize(expectedText)) {
+    throw new Error('Document has changed since this patch was generated');
+  }
+}
+
+function applyStoryUpdate(docId, storyId, proposedText, expectedCurrentText, force) {
   var section = findStorySection(docId, storyId);
   if (!section) {
     throw new Error('Story ' + storyId + ' not found in document');
   }
+
+  if (!force) _checkExpectedText(docId, section, expectedCurrentText);
 
   // Normalize spacing: blank line after heading, between each criterion, and trailing
   var insertText = _normalizeStorySpacing(proposedText);
@@ -259,29 +289,75 @@ function applyStoryUpdate(docId, storyId, proposedText) {
 
   Docs.Documents.batchUpdate({ requests: requests }, docId);
 
-  // Fix paragraph styles — first line H3 + bold, rest NORMAL_TEXT. Add blank line after H3.
+  // Fix paragraph styles — first line H3 (not bold), rest NORMAL_TEXT.
   _fixStoryParagraphStyles(docId, section.startIndex, insertText);
 
   Logger.log('Applied story update for ' + storyId);
 }
 
 /**
- * Apply a story-level create: insert new story text at the end of the document.
+ * Apply a story-level create: insert new story after the last user story in the document.
  */
-function applyStoryCreate(docId, proposedText) {
+function applyStoryCreate(docId, proposedText, storyId, force) {
+  // Check if story already exists — warn but don't block
+  if (storyId && !force) {
+    var existing = findStorySection(docId, storyId);
+    if (existing) {
+      throw new Error('Story ' + storyId + ' already exists in document');
+    }
+  }
+
+  // Find the end of the last H3 story section
   var doc = Docs.Documents.get(docId);
-  var lastEl = doc.body.content[doc.body.content.length - 1];
-  var endIndex = lastEl.endIndex - 1;
+  var content = doc.body.content || [];
+  var lastStoryEnd = -1;
+  var storyPattern = /^T?F\d+S\d+/i;
+
+  for (var i = 0; i < content.length; i++) {
+    var el = content[i];
+    if (!el.paragraph) continue;
+    var style = el.paragraph.paragraphStyle || {};
+    if (style.namedStyleType === 'HEADING_3') {
+      var text = _extractParagraphText(el.paragraph);
+      if (storyPattern.test(text)) {
+        // Found a story heading — find where this story ends
+        lastStoryEnd = -1;
+        for (var j = i + 1; j < content.length; j++) {
+          var nextEl = content[j];
+          if (!nextEl.paragraph) continue;
+          var nextStyle = nextEl.paragraph.paragraphStyle || {};
+          if (nextStyle.namedStyleType === 'HEADING_3') {
+            lastStoryEnd = nextEl.startIndex;
+            break;
+          }
+        }
+        if (lastStoryEnd === -1) {
+          // Last story in doc — ends at end of content
+          var lastEl = content[content.length - 1];
+          lastStoryEnd = lastEl.endIndex;
+        }
+      }
+    }
+  }
+
+  // If no stories found, append at end of document
+  var insertIndex;
+  if (lastStoryEnd === -1) {
+    var lastEl = content[content.length - 1];
+    insertIndex = lastEl.endIndex - 1;
+  } else {
+    insertIndex = lastStoryEnd - 1;
+  }
 
   var insertText = '\n' + _normalizeStorySpacing(proposedText);
   var requests = [
-    { insertText: { location: { index: endIndex }, text: insertText } },
+    { insertText: { location: { index: insertIndex }, text: insertText } },
   ];
 
   Docs.Documents.batchUpdate({ requests: requests }, docId);
 
-  // Fix styles — first line H3, rest NORMAL_TEXT
-  _fixStoryParagraphStyles(docId, endIndex + 1, insertText);
+  // Fix styles — first line H3 (not bold), rest NORMAL_TEXT
+  _fixStoryParagraphStyles(docId, insertIndex + 1, insertText);
 
   Logger.log('Applied story create');
 }
@@ -289,11 +365,13 @@ function applyStoryCreate(docId, proposedText) {
 /**
  * Apply a story-level delete: remove the entire story section.
  */
-function applyStoryDelete(docId, storyId) {
+function applyStoryDelete(docId, storyId, expectedCurrentText, force) {
   var section = findStorySection(docId, storyId);
   if (!section) {
     throw new Error('Story ' + storyId + ' not found in document');
   }
+
+  if (!force) _checkExpectedText(docId, section, expectedCurrentText);
 
   var requests = [
     { deleteContentRange: { range: { startIndex: section.startIndex, endIndex: section.endIndex } } },
@@ -310,36 +388,23 @@ function applyStoryDelete(docId, storyId) {
  */
 /**
  * Normalize story text spacing:
- * - Blank line after the heading (first line)
- * - Blank line between each acceptance criterion (lines starting with a letter + period)
- * - Trailing blank line for separation from next story
+ * - Strip all blank lines within a story (no gaps between heading and criteria or between criteria)
+ * - Trailing newline for clean insertion
  */
 function _normalizeStorySpacing(text) {
+  // Remove extra blank lines — no blank lines between heading and criteria or between criteria
   var lines = text.replace(/\r\n/g, '\n').split('\n');
   var result = [];
 
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
-    var nextLine = i + 1 < lines.length ? lines[i + 1] : null;
-
+    // Skip blank lines
+    if (line.trim() === '') continue;
     result.push(line);
-
-    // Don't add extra blank line if next line is already blank
-    if (nextLine !== null && nextLine.trim() === '') continue;
-
-    // After first line (heading): add blank line
-    if (i === 0 && nextLine !== null) {
-      result.push('');
-    }
-    // After each criterion line (starts with A-Z + period): add blank line before next criterion
-    else if (/^[A-Z]\.\s/.test(line) && nextLine !== null && nextLine.trim() !== '') {
-      result.push('');
-    }
   }
 
-  // Ensure trailing blank line
-  var joined = result.join('\n').replace(/\n+$/, '');
-  return joined + '\n\n';
+  // Ensure trailing newline
+  return result.join('\n') + '\n';
 }
 
 function _fixStoryParagraphStyles(docId, insertStartIndex, insertedText) {
@@ -358,7 +423,7 @@ function _fixStoryParagraphStyles(docId, insertStartIndex, insertedText) {
     if (el.startIndex >= insertEndIndex) break;
 
     if (isFirst) {
-      // First paragraph: H3 heading, bold
+      // First paragraph: H3 heading, not bold
       requests.push({
         updateParagraphStyle: {
           range: { startIndex: el.startIndex, endIndex: el.endIndex },
@@ -369,7 +434,7 @@ function _fixStoryParagraphStyles(docId, insertStartIndex, insertedText) {
       requests.push({
         updateTextStyle: {
           range: { startIndex: el.startIndex, endIndex: el.endIndex - 1 },
-          textStyle: { bold: true },
+          textStyle: { bold: false },
           fields: 'bold',
         }
       });

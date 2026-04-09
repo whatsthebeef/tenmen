@@ -55,20 +55,16 @@ function findOrCreateFolder(driveId, name) {
   return createFolder(name, driveId);
 }
 
-function findTranscriptsFolder(driveId) {
-  return findFolderByName(driveId, getFolderName('TRANSCRIPTS_FOLDER_NAME'));
+function findFormulationFolder(driveId) {
+  return findFolderByName(driveId, getFolderName('FORMULATION_FOLDER_NAME'));
 }
 
 function getExcludedFolderIds(driveId) {
   var ids = new Set();
-  var transcripts = findFolderByName(driveId, getFolderName('TRANSCRIPTS_FOLDER_NAME'));
-  var proposals = findFolderByName(driveId, getFolderName('PROPOSALS_FOLDER_NAME'));
-  var archive = findFolderByName(driveId, getFolderName('ARCHIVE_FOLDER_NAME'));
+  var formulation = findFolderByName(driveId, getFolderName('FORMULATION_FOLDER_NAME'));
   var techNotes = findFolderByName(driveId, getFolderName('TECHNICAL_NOTES_FOLDER_NAME'));
   var patches = findFolderByName(driveId, getFolderName('PATCHES_FOLDER_NAME'));
-  if (transcripts) ids.add(transcripts);
-  if (proposals) ids.add(proposals);
-  if (archive) ids.add(archive);
+  if (formulation) ids.add(formulation);
   if (techNotes) ids.add(techNotes);
   if (patches) ids.add(patches);
   return ids;
@@ -78,28 +74,48 @@ function getExcludedFolderIds(driveId) {
 // Change detection
 // ============================================================
 
-function getChangedTranscripts(driveId, since) {
-  var transcriptsFolderId = findTranscriptsFolder(driveId);
-  if (!transcriptsFolderId) return [];
+function getChangedFormulationDocs(driveId, since) {
+  var formulationFolderId = findFormulationFolder(driveId);
+  if (!formulationFolderId) return [];
 
-  var sinceStr = since.toISOString();
-  var changes = [];
+  // List all files currently in the formulation folder
+  var allFiles = [];
   var pageToken = null;
-
   do {
     var resp = Drive.Files.list({
-      q: "'" + transcriptsFolderId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and modifiedTime > '" + sinceStr + "' and trashed = false",
-      fields: 'nextPageToken,files(id,name)',
+      q: "'" + formulationFolderId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and trashed = false",
+      fields: 'nextPageToken,files(id,name,modifiedTime)',
       corpora: 'drive',
       driveId: driveId,
       pageSize: 100,
       pageToken: pageToken,
       ..._SD,
     });
-    (resp.files || []).forEach(function(f) { changes.push({ fileId: f.id, fileName: f.name }); });
+    (resp.files || []).forEach(function(f) { allFiles.push(f); });
     pageToken = resp.nextPageToken;
   } while (pageToken);
 
+  // Compare against known files from last check
+  var knownKey = 'known_formulation_' + driveId;
+  var knownJson = getProp(knownKey);
+  var knownIds = {};
+  if (knownJson) {
+    try { knownIds = JSON.parse(knownJson); } catch (e) { knownIds = {}; }
+  }
+
+  // Build new known set and detect changes
+  // A file is "changed" only if it's new or its modifiedTime differs from what we stored
+  var newKnown = {};
+  var changes = [];
+
+  allFiles.forEach(function(f) {
+    newKnown[f.id] = f.modifiedTime;
+    if (!knownIds[f.id] || knownIds[f.id] !== f.modifiedTime) {
+      changes.push({ fileId: f.id, fileName: f.name });
+    }
+  });
+
+  setProp(knownKey, JSON.stringify(newKnown));
   return changes;
 }
 
@@ -158,20 +174,8 @@ function getDocLastModifiedTime(fileId) {
 }
 
 // ============================================================
-// Proposal doc operations
+// Doc operations
 // ============================================================
-
-function createProposalDoc(name, folderId) {
-  var file = Drive.Files.create({
-    name: name,
-    mimeType: GOOGLE_DOCS_MIME,
-    parents: [folderId],
-  }, null, { supportsAllDrives: true });
-  return {
-    fileId: file.id,
-    url: 'https://docs.google.com/document/d/' + file.id + '/edit',
-  };
-}
 
 function copyDocToFolder(sourceDocId, newName, folderId) {
   var file = Drive.Files.copy({
@@ -204,21 +208,27 @@ function moveDocToFolder(fileId, targetFolderId) {
 }
 
 function getLastSummaryFile(driveId) {
-  var transcriptsFolderId = findTranscriptsFolder(driveId);
-  if (!transcriptsFolderId) return null;
+  var formulationFolderId = findFormulationFolder(driveId);
+  if (!formulationFolderId) return null;
 
-  var resp = Drive.Files.list({
-    q: "'" + transcriptsFolderId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and trashed = false",
-    fields: 'files(id,name,modifiedTime)',
-    orderBy: 'modifiedTime desc',
-    pageSize: 1,
-    corpora: 'drive',
-    driveId: driveId,
-    ..._SD,
-  });
+  var files = [];
+  var pageToken = null;
+  do {
+    var resp = Drive.Files.list({
+      q: "'" + formulationFolderId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and trashed = false",
+      fields: 'nextPageToken,files(id,name,modifiedTime)',
+      pageSize: 100,
+      pageToken: pageToken,
+      corpora: 'drive',
+      driveId: driveId,
+      ..._SD,
+    });
+    (resp.files || []).forEach(function(f) { files.push(f); });
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
 
-  var files = resp.files || [];
   if (!files.length) return null;
+  files.sort(function(a, b) { return new Date(b.modifiedTime) - new Date(a.modifiedTime); });
   return { fileId: files[0].id, fileName: files[0].name };
 }
 
@@ -321,7 +331,7 @@ function listAllPatchFiles(driveId) {
   return (resp.files || []).map(function(f) {
     var featureMatch = f.name.match(/^(F\d+)-(?:task-)?patch-/i);
     var isTaskPatch = f.name.indexOf('-task-patch-') !== -1;
-    return {
+    var entry = {
       patchId: f.name.replace('.json', ''),
       fileId: f.id,
       fileName: f.name,
@@ -329,6 +339,23 @@ function listAllPatchFiles(driveId) {
       patchType: isTaskPatch ? 'task' : 'feature',
       created: f.createdTime,
     };
+    try {
+      var content = readPatchFile(f.id);
+      entry.targetDocName = content.targetDocName || '';
+      entry.targetDocUrl = content.targetDocUrl || '';
+      entry.targetSpreadsheetUrl = content.targetSpreadsheetUrl || '';
+      entry.sourceFileName = content.sourceFileName || '';
+      entry.sourceFileUrl = content.sourceFileUrl || '';
+      var ops = content.operations || [];
+      entry.operationCount = ops.length;
+      entry.pendingCount = ops.filter(function(op) { return !op._applied && !op._dismissed; }).length;
+    } catch (e) {
+      entry.targetDocName = '';
+      entry.sourceFileName = '';
+      entry.operationCount = 0;
+      entry.pendingCount = 0;
+    }
+    return entry;
   });
 }
 

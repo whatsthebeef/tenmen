@@ -392,22 +392,39 @@ body {
 @keyframes fadeIn {
   to { opacity: 1; }
 }
-.diff-del {
+div.diff-del, div.diff-add, div.diff-line {
+  padding: 2px 6px;
+  margin: 1px 0;
+  border-radius: 3px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+div.diff-del {
+  color: #cf222e;
+  text-decoration: line-through;
+  background: #fce8e6;
+}
+div.diff-add {
+  color: #1a7f37;
+  background: #e6f4ea;
+}
+div.diff-line {
+  color: #202124;
+}
+span.diff-del {
   color: #cf222e;
   text-decoration: line-through;
   background: #fce8e6;
   padding: 1px 2px;
   border-radius: 2px;
 }
-.diff-add {
+span.diff-add {
   color: #1a7f37;
   background: #e6f4ea;
   padding: 1px 2px;
   border-radius: 2px;
-}
-.diff-line {
-  color: #202124;
-  padding: 1px 2px;
 }
 .op-diff:not(.editing) {
   cursor: text;
@@ -494,7 +511,7 @@ body {
   display: flex;
   background: #fff;
   border-bottom: 1px solid #e0e0e0;
-  padding: 0;
+  padding: 6px 0 0 0;
 }
 .view-tab {
   flex: 1;
@@ -555,6 +572,108 @@ body {
 .task-status-finished { background: #e6f4ea; color: #1a7f37; }
 .task-status-error { background: #fce8e6; color: #c5221f; }
 .task-status-todo { background: #f1f3f4; color: #5f6368; }
+
+/* Patch back button */
+.patch-back {
+  padding: 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.patch-back-btn {
+  background: none;
+  border: none;
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.patch-back-btn:hover {
+  text-decoration: underline;
+}
+
+/* Patch index */
+.patch-index-card {
+  padding: 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+.patch-index-card:last-child {
+  border-bottom: none;
+}
+.patch-index-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.patch-index-meta {
+  font-size: 11px;
+  color: #5f6368;
+}
+.patch-index-review {
+  display: block;
+  width: 100%;
+  background: #e8f0fe;
+  border: none;
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-align: left;
+  margin-bottom: 8px;
+}
+.patch-index-review:hover {
+  background: #d2e3fc;
+}
+.patch-index-delete {
+  background: transparent;
+  border: none;
+  color: #c5221f;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.patch-index-delete:hover {
+  background: #fce8e6;
+  border-radius: 4px;
+}
+
+/* Activity log */
+.activity-log-section {
+  padding: 12px;
+  background: #fff;
+  border-top: 1px solid #e0e0e0;
+}
+.activity-log {
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: monospace;
+  color: #5f6368;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+.activity-log-entry {
+  padding: 4px 0;
+  border-bottom: 1px solid #ecedef;
+  line-height: 1.5;
+}
+.activity-log-entry:last-child {
+  border-bottom: none;
+}
+.activity-log-time {
+  color: #80868b;
+  margin-right: 6px;
+}
+.activity-log-entry.error {
+  color: #c5221f;
+}
 
 /* Loading */
 .loading {

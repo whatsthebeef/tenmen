@@ -7,7 +7,7 @@ const DEBOUNCE_PREFIX = 'debounce_';
 /**
  * Record that a file was changed. Resets debounce timer if already tracking.
  * @param {string} fileId
- * @param {string} fileType - 'transcript' or 'user_story'
+ * @param {string} fileType - 'formulation' or 'feature_doc'
  * @param {string} fileName
  */
 function recordFileChange(fileId, fileType, fileName) {

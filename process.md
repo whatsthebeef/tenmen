@@ -243,10 +243,10 @@ Tenmen automates the management of feature documentation and development task li
 
 ### Flow 1: Meeting Summary → Feature Document Change Proposal
 
-**Trigger**: New or modified Google Doc in the `transcripts/` folder
+**Trigger**: New or modified Google Doc in the `formulation/` folder
 
 **Steps**:
-1. Poll cycle (every 1 minute) detects change in `transcripts/` folder
+1. Poll cycle (every 1 minute) detects change in `formulation/` folder
 2. Debounce waits for editing to stop (configurable, default 10 minutes)
 3. Gemini reads the meeting summary and all known Feature Documents
 4. Gemini identifies which features were discussed (returns list of Feature IDs)
@@ -402,7 +402,7 @@ Used by the Claude Code orchestrator to interact with the task list.
 Shared Drive/
 ├── F1 Teacher Support Documents          ← Feature Document
 ├── F2 Student Dashboard                  ← Feature Document
-├── transcripts/                          ← Meeting summaries dropped here
+├── formulation/                          ← Meeting summaries dropped here
 │   └── Tech Meeting - 2026-03-25...     ← Gemini meeting summary
 ├── technical_notes/                      ← Auto-created per feature
 │   ├── F1 Technical Notes
