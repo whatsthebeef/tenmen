@@ -14,7 +14,9 @@
   <nav class="view-tabs" id="view-tabs" style="display:none;">
     <button class="view-tab active" data-view="patches">Patches</button>
     <button class="view-tab" data-view="tasks">Tasks</button>
-    <button class="view-tab" data-view="settings">Settings</button>
+    <button class="view-tab" data-view="bugs">Bugs</button>
+    <button class="view-tab" data-view="docs">Docs</button>
+    <button class="view-tab view-tab-icon" data-view="settings" title="Settings">&#9881;</button>
   </nav>
 
   <div class="status-bar" id="status-bar"></div>
@@ -39,9 +41,75 @@
 
   <!-- Tasks view -->
   <div class="view" id="view-tasks" style="display:none;">
+    <div class="task-filter">
+      <input type="text" id="task-filter-input" placeholder="Filter by ID...">
+      <button class="task-filter-clear" id="task-filter-clear">&times;</button>
+    </div>
     <div class="loading" id="tasks-loading" style="display:none;">Loading Tasks...</div>
     <div id="task-list"></div>
     <div class="all-done" id="tasks-empty" style="display:none;">No tasks found</div>
+    <!-- Task detail view -->
+    <div id="task-detail" style="display:none;">
+      <div class="patch-back" id="task-back">
+        <button class="patch-back-btn" id="btn-task-back">&larr; Back to tasks</button>
+      </div>
+      <div id="task-detail-content"></div>
+      <div class="task-detail-actions">
+        <button class="action-btn" id="btn-task-save" style="display:none;">Save</button>
+      </div>
+      <div class="settings-message" id="task-detail-message" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Bugs view -->
+  <div class="view" id="view-bugs" style="display:none;">
+    <div class="task-filter">
+      <input type="text" id="bug-filter-input" placeholder="Filter by ID...">
+      <button class="task-filter-clear" id="bug-filter-clear">&times;</button>
+    </div>
+    <div class="loading" id="bugs-loading" style="display:none;">Loading Bugs...</div>
+    <div id="bug-list"></div>
+    <div class="all-done" id="bugs-empty" style="display:none;">No bugs found</div>
+    <div id="bug-actions" style="padding:12px;">
+      <button class="action-btn" id="btn-new-bug">New Bug</button>
+    </div>
+    <!-- Bug detail view -->
+    <div id="bug-detail" style="display:none;">
+      <div class="patch-back" id="bug-back">
+        <button class="patch-back-btn" id="btn-bug-back">&larr; Back to bugs</button>
+      </div>
+      <div id="bug-detail-content"></div>
+      <div class="task-detail-actions">
+        <button class="action-btn" id="btn-bug-save" style="display:none;">Save</button>
+        <button class="action-btn settings-cancel" id="btn-bug-delete" style="display:none;">Delete</button>
+      </div>
+      <div class="settings-message" id="bug-detail-message" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- Docs view -->
+  <div class="view" id="view-docs" style="display:none;">
+    <div id="docs-drive-selector" style="display:none;padding:10px 12px;background:#fff;border-bottom:1px solid #e0e0e0;">
+      <select id="docs-drive-select" class="task-detail-textarea" style="resize:none;margin:0;"></select>
+    </div>
+    <div class="loading" id="docs-loading" style="display:none;">Loading Documents...</div>
+    <div id="docs-list"></div>
+    <div class="all-done" id="docs-empty" style="display:none;">No feature documents found</div>
+    <div id="docs-actions">
+      <button class="action-btn" id="btn-new-feature-doc">New Feature Document</button>
+    </div>
+    <!-- Doc detail view -->
+    <div id="doc-detail" style="display:none;">
+      <div class="patch-back" id="doc-back">
+        <button class="patch-back-btn" id="btn-doc-back">&larr; Back to documents</button>
+      </div>
+      <div id="doc-detail-header"></div>
+      <div id="doc-detail-stories"></div>
+      <div style="padding:12px;">
+        <button class="action-btn" id="btn-add-story" style="display:none;">Add User Story</button>
+      </div>
+      <div class="settings-message" id="doc-detail-message" style="display:none;"></div>
+    </div>
   </div>
 
   <!-- Settings view -->

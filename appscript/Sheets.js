@@ -1,9 +1,11 @@
 // ============================================================
-// Google Sheets — tasks
+// Google Sheets — tasks and bugs
 // ============================================================
 
 const MAIN_TAB = 'Tasks';
+const BUGS_TAB = 'Bugs';
 const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'status', 'date_updated', 'additional_notes'];
+const BUGS_HEADERS = ['id', 'steps_to_reproduce', 'expected', 'actual', 'environment', 'reporter', 'date_created', 'date_updated', 'notes', 'additional_notes'];
 
 const PROTECTED_STATUSES = new Set(['Doing', 'Review', 'Signed Off']);
 
@@ -21,6 +23,7 @@ function initializeSheet() {
 
   var tabsConfig = [
     { name: MAIN_TAB, headers: TASKS_HEADERS },
+    { name: BUGS_TAB, headers: BUGS_HEADERS },
   ];
 
   tabsConfig.forEach(function(cfg) {
@@ -155,4 +158,119 @@ function applyTaskChanges(changeset, featureId) {
       deleteTask(rem.id);
     }
   });
+}
+
+// ============================================================
+// Bug operations
+// ============================================================
+
+function getAllBugs() {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(BUGS_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, BUGS_HEADERS.length).getValues();
+  var bugs = [];
+
+  data.forEach(function(row) {
+    if (!row[0]) return;
+    bugs.push({
+      id: String(row[0]),
+      steps_to_reproduce: String(row[1]),
+      expected: String(row[2]),
+      actual: String(row[3]),
+      environment: String(row[4]),
+      reporter: String(row[5]),
+      dateCreated: row[6] instanceof Date ? row[6].toISOString() : String(row[6]),
+      dateUpdated: row[7] instanceof Date ? row[7].toISOString() : String(row[7]),
+      notes: String(row[8]),
+      additional_notes: String(row[9]),
+    });
+  });
+
+  return bugs;
+}
+
+function getBugById(bugId) {
+  var bugs = getAllBugs();
+  return bugs.find(function(b) { return b.id === bugId; }) || null;
+}
+
+function _nextBugId() {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(BUGS_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return 'B1';
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  var maxNum = 0;
+  data.forEach(function(row) {
+    var m = String(row[0]).match(/^B(\d+)$/i);
+    if (m) {
+      var n = parseInt(m[1]);
+      if (n > maxNum) maxNum = n;
+    }
+  });
+  return 'B' + (maxNum + 1);
+}
+
+function addBug(bug) {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(BUGS_TAB);
+  if (!sheet) {
+    sheet = ss.insertSheet(BUGS_TAB);
+    sheet.appendRow(BUGS_HEADERS);
+  }
+  var now = new Date().toISOString();
+  var id = bug.id || _nextBugId();
+  sheet.appendRow([
+    id,
+    bug.steps_to_reproduce || '',
+    bug.expected || '',
+    bug.actual || '',
+    bug.environment || '',
+    bug.reporter || '',
+    now,
+    now,
+    bug.notes || '',
+    bug.additional_notes || '',
+  ]);
+  return id;
+}
+
+function updateBug(bugId, updates) {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(BUGS_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return false;
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, BUGS_HEADERS.length).getValues();
+
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === bugId) {
+      var rowNum = i + 2;
+      if (updates.steps_to_reproduce !== undefined) sheet.getRange(rowNum, 2).setValue(updates.steps_to_reproduce);
+      if (updates.expected !== undefined) sheet.getRange(rowNum, 3).setValue(updates.expected);
+      if (updates.actual !== undefined) sheet.getRange(rowNum, 4).setValue(updates.actual);
+      if (updates.environment !== undefined) sheet.getRange(rowNum, 5).setValue(updates.environment);
+      if (updates.reporter !== undefined) sheet.getRange(rowNum, 6).setValue(updates.reporter);
+      if (updates.notes !== undefined) sheet.getRange(rowNum, 9).setValue(updates.notes);
+      if (updates.additional_notes !== undefined) sheet.getRange(rowNum, 10).setValue(updates.additional_notes);
+      sheet.getRange(rowNum, 8).setValue(new Date().toISOString());
+      return true;
+    }
+  }
+  return false;
+}
+
+function deleteBug(bugId) {
+  var ss = getSpreadsheet();
+  var sheet = ss.getSheetByName(BUGS_TAB);
+  if (!sheet || sheet.getLastRow() <= 1) return false;
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === bugId) {
+      sheet.deleteRow(i + 2);
+      return true;
+    }
+  }
+  return false;
 }

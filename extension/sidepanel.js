@@ -195,10 +195,55 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   document.getElementById('btn-patch-back').addEventListener('click', backToPatchIndex);
+  document.getElementById('btn-task-back').addEventListener('click', backToTaskList);
+  document.getElementById('btn-task-save').addEventListener('click', saveTaskDetail);
+  document.getElementById('btn-doc-back').addEventListener('click', backToDocList);
+  document.getElementById('btn-new-feature-doc').addEventListener('click', showNewDocForm);
+  document.getElementById('btn-add-story').addEventListener('click', addNewStory);
+  document.getElementById('btn-bug-back').addEventListener('click', backToBugList);
+  document.getElementById('btn-bug-save').addEventListener('click', saveBugDetail);
+  document.getElementById('btn-bug-delete').addEventListener('click', deleteBugDetail);
+  document.getElementById('btn-new-bug').addEventListener('click', createNewBug);
+
+  document.getElementById('bug-filter-input').addEventListener('input', function() {
+    var filter = this.value.trim().toUpperCase();
+    document.getElementById('bug-filter-clear').style.display = filter ? '' : 'none';
+    var items = document.querySelectorAll('#bug-list .bug-item');
+    items.forEach(function(item) {
+      var id = item.querySelector('.bug-id');
+      var bugId = id ? id.textContent.toUpperCase() : '';
+      item.style.display = (!filter || bugId.indexOf(filter) === 0) ? '' : 'none';
+    });
+  });
+
+  document.getElementById('bug-filter-clear').addEventListener('click', function() {
+    var input = document.getElementById('bug-filter-input');
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    input.focus();
+  });
 
   document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
 
   document.getElementById('btn-add-project').addEventListener('click', addProject);
+
+  document.getElementById('task-filter-input').addEventListener('input', function() {
+    var filter = this.value.trim().toUpperCase();
+    document.getElementById('task-filter-clear').style.display = filter ? '' : 'none';
+    var items = document.querySelectorAll('#task-list .task-item');
+    items.forEach(function(item) {
+      var id = item.querySelector('.task-id');
+      var taskId = id ? id.textContent.toUpperCase() : '';
+      item.style.display = (!filter || taskId.indexOf(filter) === 0) ? '' : 'none';
+    });
+  });
+
+  document.getElementById('task-filter-clear').addEventListener('click', function() {
+    var input = document.getElementById('task-filter-input');
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    input.focus();
+  });
 
   // View tab switching
   document.querySelectorAll('.view-tab').forEach(function(tab) {
@@ -348,26 +393,6 @@ function renderPatchIndex() {
     })(p, targetUrl));
     card.appendChild(reviewBtn);
 
-    var sourceLabel = document.createElement('div');
-    sourceLabel.className = 'section-label';
-    sourceLabel.style.marginTop = '8px';
-    sourceLabel.textContent = 'Based on';
-    card.appendChild(sourceLabel);
-
-    if (p.sourceFileUrl) {
-      var sourceLink = document.createElement('a');
-      sourceLink.className = 'feature-doc-link';
-      sourceLink.href = p.sourceFileUrl;
-      sourceLink.target = '_blank';
-      sourceLink.textContent = sourceName;
-      card.appendChild(sourceLink);
-    } else {
-      var sourceSpan = document.createElement('span');
-      sourceSpan.className = 'feature-doc-link';
-      sourceSpan.textContent = sourceName;
-      card.appendChild(sourceSpan);
-    }
-
     var footer = document.createElement('div');
     footer.className = 'patch-index-footer';
 
@@ -375,6 +400,16 @@ function renderPatchIndex() {
     meta.className = 'patch-index-meta';
     meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending';
     footer.appendChild(meta);
+
+    if (p.sourceFileUrl) {
+      var sourceLink = document.createElement('a');
+      sourceLink.className = 'patch-index-source';
+      sourceLink.href = p.sourceFileUrl;
+      sourceLink.target = '_blank';
+      sourceLink.textContent = sourceName;
+      sourceLink.addEventListener('click', function(e) { e.stopPropagation(); });
+      footer.appendChild(sourceLink);
+    }
 
     var deleteBtn = document.createElement('button');
     deleteBtn.className = 'patch-index-delete';
@@ -1296,6 +1331,10 @@ function switchView(name) {
     loadSettings();
   } else if (name === 'patches') {
     fetchAllPatches();
+  } else if (name === 'bugs') {
+    fetchBugs();
+  } else if (name === 'docs') {
+    fetchFeatureDocs();
   }
 }
 
@@ -1346,9 +1385,24 @@ function fetchTasks() {
 function renderTaskList(tasks) {
   var container = document.getElementById('task-list');
   container.innerHTML = '';
+  tasks = tasks.slice().sort(function(a, b) {
+    var pa = (a.id || '').match(/F(\d+)S(\d+)T(\d+)/i);
+    var pb = (b.id || '').match(/F(\d+)S(\d+)T(\d+)/i);
+    if (pa && pb) {
+      var fa = parseInt(pa[1]), fb = parseInt(pb[1]);
+      if (fa !== fb) return fa - fb;
+      var sa = parseInt(pa[2]), sb = parseInt(pb[2]);
+      if (sa !== sb) return sa - sb;
+      return parseInt(pa[3]) - parseInt(pb[3]);
+    }
+    return (a.id || '').localeCompare(b.id || '');
+  });
+  document.getElementById('task-detail').style.display = 'none';
+  document.getElementById('view-tabs').style.display = '';
   tasks.forEach(function(task) {
     var div = document.createElement('div');
     div.className = 'task-item';
+    div.style.cursor = 'pointer';
 
     var id = document.createElement('span');
     id.className = 'task-id';
@@ -1366,8 +1420,846 @@ function renderTaskList(tasks) {
     div.appendChild(id);
     div.appendChild(name);
     div.appendChild(status);
+
+    div.addEventListener('click', (function(t) {
+      return function() { openTaskDetail(t); };
+    })(task));
+
     container.appendChild(div);
   });
+}
+
+// ============================================================
+// Task detail view
+// ============================================================
+
+var TASK_FIELDS = [
+  { key: 'name', label: 'Name' },
+  { key: 'description', label: 'Description' },
+  { key: 'acceptance_criteria', label: 'Acceptance Criteria' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'status', label: 'Status' },
+  { key: 'additional_notes', label: 'Additional Notes' },
+];
+
+function openTaskDetail(task) {
+  state._editingTask = JSON.parse(JSON.stringify(task));
+  state._taskDirty = false;
+
+  document.getElementById('task-list').style.display = 'none';
+  document.getElementById('tasks-loading').style.display = 'none';
+  document.getElementById('tasks-empty').style.display = 'none';
+  document.getElementById('view-tabs').style.display = 'none';
+  document.getElementById('task-detail-message').style.display = 'none';
+
+  var detail = document.getElementById('task-detail');
+  detail.style.display = 'block';
+
+  var content = document.getElementById('task-detail-content');
+  content.innerHTML = '';
+
+  // Task ID header
+  var idDiv = document.createElement('div');
+  idDiv.className = 'task-detail-id';
+  idDiv.textContent = task.id;
+  content.appendChild(idDiv);
+
+  // Editable fields
+  TASK_FIELDS.forEach(function(field) {
+    var fieldDiv = document.createElement('div');
+    fieldDiv.className = 'task-detail-field';
+
+    var label = document.createElement('div');
+    label.className = 'task-detail-label';
+    label.textContent = field.label;
+    fieldDiv.appendChild(label);
+
+    if (field.key === 'status') {
+      // Status field — render as select
+      var select = document.createElement('select');
+      select.className = 'task-detail-textarea';
+      select.style.resize = 'none';
+      ['To Do', 'Ready', 'Working', 'Review', 'Done'].forEach(function(opt) {
+        var option = document.createElement('option');
+        option.value = opt;
+        option.textContent = opt;
+        if (opt === (task[field.key] || '')) option.selected = true;
+        select.appendChild(option);
+      });
+      select.addEventListener('change', function() {
+        state._editingTask[field.key] = select.value;
+        state._taskDirty = true;
+        document.getElementById('btn-task-save').style.display = '';
+      });
+      fieldDiv.appendChild(select);
+      content.appendChild(fieldDiv);
+      return;
+    }
+
+    var value = document.createElement('div');
+    value.className = 'task-detail-value';
+    value.textContent = task[field.key] || '';
+    fieldDiv.appendChild(value);
+
+    // Click to edit
+    value.addEventListener('click', (function(f, valEl, fieldContainer) {
+      return function() {
+        if (fieldContainer.querySelector('.task-detail-textarea')) return;
+        var textarea = document.createElement('textarea');
+        textarea.className = 'task-detail-textarea';
+        textarea.value = state._editingTask[f.key] || '';
+        textarea.rows = Math.max(2, (textarea.value.split('\n').length) + 1);
+        valEl.style.display = 'none';
+        fieldContainer.appendChild(textarea);
+
+        var btnRow = document.createElement('div');
+        btnRow.className = 'task-detail-edit-actions';
+        var doneBtn = document.createElement('button');
+        doneBtn.className = 'op-edit-done';
+        doneBtn.textContent = 'Done';
+        doneBtn.addEventListener('click', function() {
+          state._editingTask[f.key] = textarea.value;
+          valEl.textContent = textarea.value;
+          valEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+          state._taskDirty = true;
+          document.getElementById('btn-task-save').style.display = '';
+        });
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'op-edit-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', function() {
+          valEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+        });
+        btnRow.appendChild(doneBtn);
+        btnRow.appendChild(cancelBtn);
+        fieldContainer.appendChild(btnRow);
+        textarea.focus();
+      };
+    })(field, value, fieldDiv));
+
+    content.appendChild(fieldDiv);
+  });
+
+  document.getElementById('btn-task-save').style.display = 'none';
+}
+
+function saveTaskDetail() {
+  if (!state._editingTask || !state._taskDirty) return;
+  if (document.querySelector('#task-detail-content .task-detail-textarea')) {
+    var msgEl = document.getElementById('task-detail-message');
+    msgEl.textContent = 'Finish editing all fields before saving.';
+    msgEl.className = 'settings-message error';
+    msgEl.style.display = 'block';
+    return;
+  }
+  var btn = document.getElementById('btn-task-save');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  var msgEl = document.getElementById('task-detail-message');
+  msgEl.style.display = 'none';
+
+  var payload = { action: 'update_task', taskId: state._editingTask.id };
+  TASK_FIELDS.forEach(function(f) {
+    payload[f.key] = state._editingTask[f.key] || '';
+  });
+
+  apiPost(state.webAppUrl, payload, function(response) {
+    btn.disabled = false;
+    btn.textContent = 'Save';
+    if (response && response.ok && response.data && response.data.success) {
+      msgEl.textContent = 'Task saved.';
+      msgEl.className = 'settings-message success';
+      msgEl.style.display = 'block';
+      state._taskDirty = false;
+      btn.style.display = 'none';
+      // Update cached tasks
+      if (state.cachedTasks) {
+        state.cachedTasks = state.cachedTasks.map(function(t) {
+          if (t.id === state._editingTask.id) return Object.assign({}, t, state._editingTask);
+          return t;
+        });
+      }
+    } else {
+      var err = (response && response.data && response.data.error) || 'Save failed';
+      msgEl.textContent = err;
+      msgEl.className = 'settings-message error';
+      msgEl.style.display = 'block';
+    }
+  });
+}
+
+function backToTaskList() {
+  document.getElementById('task-detail').style.display = 'none';
+  document.getElementById('task-list').style.display = '';
+  document.getElementById('view-tabs').style.display = '';
+  state._editingTask = null;
+  state._taskDirty = false;
+  // Re-render from cache to reflect any saved changes
+  if (state.cachedTasks) renderTaskList(state.cachedTasks);
+}
+
+// ============================================================
+// Bugs view
+// ============================================================
+
+var BUG_FIELDS = [
+  { key: 'steps_to_reproduce', label: 'Steps to Reproduce' },
+  { key: 'expected', label: 'Expected' },
+  { key: 'actual', label: 'Actual' },
+  { key: 'environment', label: 'Environment' },
+  { key: 'reporter', label: 'Reporter' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'additional_notes', label: 'Additional Notes' },
+];
+
+function fetchBugs() {
+  if (!state.webAppUrl) return;
+
+  if (state.cachedBugs) {
+    renderBugList(state.cachedBugs);
+  } else {
+    document.getElementById('bugs-loading').style.display = 'block';
+    document.getElementById('bug-list').innerHTML = '';
+    document.getElementById('bugs-empty').style.display = 'none';
+  }
+
+  apiGet(state.webAppUrl + '?action=list_bugs', function(response) {
+    document.getElementById('bugs-loading').style.display = 'none';
+    if (state.activeView !== 'bugs') return;
+    if (document.getElementById('bug-detail').style.display !== 'none') return;
+    if (!response || !response.ok || !response.data || response.data.error) {
+      if (state.cachedBugs) return;
+      return;
+    }
+    var bugs = response.data.bugs || [];
+    state.cachedBugs = bugs;
+    if (!bugs.length) {
+      document.getElementById('bug-list').innerHTML = '';
+      document.getElementById('bugs-empty').style.display = 'block';
+      return;
+    }
+    document.getElementById('bugs-empty').style.display = 'none';
+    renderBugList(bugs);
+  });
+}
+
+function renderBugList(bugs) {
+  var container = document.getElementById('bug-list');
+  container.innerHTML = '';
+  document.getElementById('bug-detail').style.display = 'none';
+  document.getElementById('view-tabs').style.display = '';
+
+  bugs = bugs.slice().sort(function(a, b) {
+    var na = parseInt((a.id || '').replace(/\D/g, '')) || 0;
+    var nb = parseInt((b.id || '').replace(/\D/g, '')) || 0;
+    return na - nb;
+  });
+
+  bugs.forEach(function(bug) {
+    var div = document.createElement('div');
+    div.className = 'bug-item';
+
+    var id = document.createElement('span');
+    id.className = 'bug-id';
+    id.textContent = bug.id;
+
+    var summary = document.createElement('span');
+    summary.className = 'bug-summary';
+    summary.textContent = bug.steps_to_reproduce ? bug.steps_to_reproduce.split('\n')[0] : '(no description)';
+
+    div.appendChild(id);
+    div.appendChild(summary);
+
+    div.addEventListener('click', (function(b) {
+      return function() { openBugDetail(b); };
+    })(bug));
+
+    container.appendChild(div);
+  });
+
+  // Re-apply filter
+  var filter = document.getElementById('bug-filter-input').value.trim().toUpperCase();
+  if (filter) {
+    container.querySelectorAll('.bug-item').forEach(function(item) {
+      var idEl = item.querySelector('.bug-id');
+      var bugId = idEl ? idEl.textContent.toUpperCase() : '';
+      item.style.display = bugId.indexOf(filter) === 0 ? '' : 'none';
+    });
+  }
+}
+
+function openBugDetail(bug) {
+  state._editingBug = JSON.parse(JSON.stringify(bug));
+  state._bugDirty = false;
+  state._bugIsNew = false;
+
+  document.getElementById('bug-list').style.display = 'none';
+  document.getElementById('bugs-loading').style.display = 'none';
+  document.getElementById('bugs-empty').style.display = 'none';
+  document.getElementById('bug-actions').style.display = 'none';
+  document.getElementById('view-tabs').style.display = 'none';
+  document.getElementById('bug-detail-message').style.display = 'none';
+
+  var detail = document.getElementById('bug-detail');
+  detail.style.display = 'block';
+
+  var content = document.getElementById('bug-detail-content');
+  content.innerHTML = '';
+
+  var idDiv = document.createElement('div');
+  idDiv.className = 'task-detail-id';
+  idDiv.style.color = '#c5221f';
+  idDiv.textContent = bug.id;
+  content.appendChild(idDiv);
+
+  BUG_FIELDS.forEach(function(field) {
+    var fieldDiv = document.createElement('div');
+    fieldDiv.className = 'task-detail-field';
+
+    var label = document.createElement('div');
+    label.className = 'task-detail-label';
+    label.textContent = field.label;
+    fieldDiv.appendChild(label);
+
+    var value = document.createElement('div');
+    value.className = 'task-detail-value';
+    value.textContent = bug[field.key] || '';
+    fieldDiv.appendChild(value);
+
+    value.addEventListener('click', (function(f, valEl, fieldContainer) {
+      return function() {
+        if (fieldContainer.querySelector('.task-detail-textarea')) return;
+        var textarea = document.createElement('textarea');
+        textarea.className = 'task-detail-textarea';
+        textarea.value = state._editingBug[f.key] || '';
+        textarea.rows = Math.max(2, (textarea.value.split('\n').length) + 1);
+        valEl.style.display = 'none';
+        fieldContainer.appendChild(textarea);
+
+        var btnRow = document.createElement('div');
+        btnRow.className = 'task-detail-edit-actions';
+        var doneBtn = document.createElement('button');
+        doneBtn.className = 'op-edit-done';
+        doneBtn.textContent = 'Done';
+        doneBtn.addEventListener('click', function() {
+          state._editingBug[f.key] = textarea.value;
+          valEl.textContent = textarea.value;
+          valEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+          state._bugDirty = true;
+          document.getElementById('btn-bug-save').style.display = '';
+        });
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'op-edit-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', function() {
+          valEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+        });
+        btnRow.appendChild(doneBtn);
+        btnRow.appendChild(cancelBtn);
+        fieldContainer.appendChild(btnRow);
+        textarea.focus();
+      };
+    })(field, value, fieldDiv));
+
+    content.appendChild(fieldDiv);
+  });
+
+  document.getElementById('btn-bug-save').style.display = 'none';
+  document.getElementById('btn-bug-delete').style.display = '';
+}
+
+function createNewBug() {
+  var newBug = {
+    id: '(new)',
+    steps_to_reproduce: '',
+    expected: '',
+    actual: '',
+    environment: '',
+    reporter: '',
+    notes: '',
+    dev_notes: '',
+  };
+  openBugDetail(newBug);
+  // Override flags after openBugDetail resets them
+  state._bugIsNew = true;
+  state._bugDirty = true;
+  document.getElementById('btn-bug-save').style.display = '';
+  document.getElementById('btn-bug-delete').style.display = 'none';
+}
+
+function saveBugDetail() {
+  if (!state._editingBug || !state._bugDirty) return;
+  if (document.querySelector('#bug-detail-content .task-detail-textarea')) {
+    var msgEl = document.getElementById('bug-detail-message');
+    msgEl.textContent = 'Finish editing all fields before saving.';
+    msgEl.className = 'settings-message error';
+    msgEl.style.display = 'block';
+    return;
+  }
+  var btn = document.getElementById('btn-bug-save');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  var msgEl = document.getElementById('bug-detail-message');
+  msgEl.style.display = 'none';
+
+  if (state._bugIsNew) {
+    var payload = { action: 'create_bug' };
+    BUG_FIELDS.forEach(function(f) { payload[f.key] = state._editingBug[f.key] || ''; });
+
+    apiPost(state.webAppUrl, payload, function(response) {
+      btn.disabled = false;
+      btn.textContent = 'Save';
+      if (response && response.ok && response.data && response.data.success) {
+        state._editingBug.id = response.data.bugId;
+        state._bugIsNew = false;
+        state._bugDirty = false;
+        btn.style.display = 'none';
+        document.getElementById('btn-bug-delete').style.display = '';
+        // Update header
+        var idDiv = document.querySelector('#bug-detail-content .task-detail-id');
+        if (idDiv) idDiv.textContent = response.data.bugId;
+        msgEl.textContent = 'Bug created: ' + response.data.bugId;
+        msgEl.className = 'settings-message success';
+        msgEl.style.display = 'block';
+        state.cachedBugs = null;
+      } else {
+        var err = (response && response.data && response.data.error) || 'Create failed';
+        msgEl.textContent = err;
+        msgEl.className = 'settings-message error';
+        msgEl.style.display = 'block';
+      }
+    });
+  } else {
+    var payload = { action: 'update_bug', bugId: state._editingBug.id };
+    BUG_FIELDS.forEach(function(f) { payload[f.key] = state._editingBug[f.key] || ''; });
+
+    apiPost(state.webAppUrl, payload, function(response) {
+      btn.disabled = false;
+      btn.textContent = 'Save';
+      if (response && response.ok && response.data && response.data.success) {
+        state._bugDirty = false;
+        btn.style.display = 'none';
+        msgEl.textContent = 'Bug saved.';
+        msgEl.className = 'settings-message success';
+        msgEl.style.display = 'block';
+        if (state.cachedBugs) {
+          state.cachedBugs = state.cachedBugs.map(function(b) {
+            if (b.id === state._editingBug.id) return Object.assign({}, b, state._editingBug);
+            return b;
+          });
+        }
+      } else {
+        var err = (response && response.data && response.data.error) || 'Save failed';
+        msgEl.textContent = err;
+        msgEl.className = 'settings-message error';
+        msgEl.style.display = 'block';
+      }
+    });
+  }
+}
+
+function deleteBugDetail() {
+  if (!state._editingBug || state._bugIsNew) return;
+  if (!confirm('Delete bug ' + state._editingBug.id + '?')) return;
+
+  var btn = document.getElementById('btn-bug-delete');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+
+  apiPost(state.webAppUrl, { action: 'delete_bug', bugId: state._editingBug.id }, function(response) {
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+    if (response && response.ok && response.data && response.data.success) {
+      state.cachedBugs = null;
+      backToBugList();
+    }
+  });
+}
+
+function backToBugList() {
+  document.getElementById('bug-detail').style.display = 'none';
+  document.getElementById('bug-list').style.display = '';
+  document.getElementById('bug-actions').style.display = '';
+  document.getElementById('view-tabs').style.display = '';
+  state._editingBug = null;
+  state._bugDirty = false;
+  fetchBugs();
+}
+
+// ============================================================
+// Docs view
+// ============================================================
+
+function fetchFeatureDocs() {
+  if (!state.webAppUrl) return;
+
+  // Determine drive(s) from config
+  if (!state._docsConfig) {
+    apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
+      if (response && response.ok && response.data) {
+        state._docsConfig = response.data;
+        _renderDocsWithConfig();
+      }
+    });
+  } else {
+    _renderDocsWithConfig();
+  }
+}
+
+function _renderDocsWithConfig() {
+  var config = state._docsConfig;
+  var projects = config.PROJECTS || [];
+  var projectConfigs = config.projectConfigs || {};
+
+  // Drive selector
+  var selectorEl = document.getElementById('docs-drive-selector');
+  var selectEl = document.getElementById('docs-drive-select');
+
+  if (projects.length > 1) {
+    selectEl.innerHTML = '';
+    projects.forEach(function(name) {
+      var opt = document.createElement('option');
+      opt.value = (projectConfigs[name] && projectConfigs[name].SHARED_DRIVE_ID) || '';
+      opt.textContent = name;
+      selectEl.appendChild(opt);
+    });
+    if (!state._selectedDriveId) {
+      state._selectedDriveId = selectEl.value;
+    } else {
+      selectEl.value = state._selectedDriveId;
+    }
+    selectEl.onchange = function() {
+      state._selectedDriveId = selectEl.value;
+      _loadDocList(selectEl.value);
+    };
+    selectorEl.style.display = '';
+  } else if (projects.length === 1) {
+    state._selectedDriveId = (projectConfigs[projects[0]] && projectConfigs[projects[0]].SHARED_DRIVE_ID) || '';
+    selectorEl.style.display = 'none';
+  } else {
+    selectorEl.style.display = 'none';
+  }
+
+  if (state._selectedDriveId) {
+    _loadDocList(state._selectedDriveId);
+  }
+}
+
+function _loadDocList(driveId) {
+  document.getElementById('doc-detail').style.display = 'none';
+  document.getElementById('docs-empty').style.display = 'none';
+
+  // Show cached docs immediately if available
+  if (state._featureDocs && state._featureDocs.length) {
+    _renderDocList(state._featureDocs);
+  } else {
+    document.getElementById('docs-loading').style.display = 'block';
+    document.getElementById('docs-list').innerHTML = '';
+  }
+
+  // Fetch fresh in background
+  apiGet(state.webAppUrl + '?action=list_feature_docs&driveId=' + encodeURIComponent(driveId), function(response) {
+    document.getElementById('docs-loading').style.display = 'none';
+    if (state.activeView !== 'docs') return;
+    if (!response || !response.ok || !response.data) {
+      if (state._featureDocs) return; // keep cached on error
+      return;
+    }
+    var docs = response.data.docs || [];
+    state._featureDocs = docs;
+    if (!docs.length) {
+      document.getElementById('docs-list').innerHTML = '';
+      document.getElementById('docs-empty').style.display = 'block';
+      return;
+    }
+    document.getElementById('docs-empty').style.display = 'none';
+    _renderDocList(docs);
+  });
+}
+
+function _renderDocList(docs) {
+  var container = document.getElementById('docs-list');
+  container.innerHTML = '';
+  // Sort by feature ID numerically
+  docs.sort(function(a, b) {
+    var na = parseInt((a.featureId || '').replace(/\D/g, '')) || 0;
+    var nb = parseInt((b.featureId || '').replace(/\D/g, '')) || 0;
+    return na - nb;
+  });
+  docs.forEach(function(doc) {
+    var div = document.createElement('div');
+    div.className = 'doc-item';
+
+    var id = document.createElement('span');
+    id.className = 'doc-feature-id';
+    id.textContent = doc.featureId;
+
+    var name = document.createElement('span');
+    name.className = 'doc-name';
+    name.textContent = doc.fileName.replace(/^F\d+\s+/i, '');
+
+    div.appendChild(id);
+    div.appendChild(name);
+
+    div.addEventListener('click', (function(d) {
+      return function() { openDocDetail(d); };
+    })(doc));
+
+    container.appendChild(div);
+  });
+}
+
+function showNewDocForm() {
+  var existing = document.querySelector('.new-doc-form');
+  if (existing) { existing.remove(); return; }
+
+  // Determine next feature ID
+  var nextNum = 1;
+  if (state._featureDocs) {
+    state._featureDocs.forEach(function(d) {
+      var n = parseInt((d.featureId || '').replace(/\D/g, '')) || 0;
+      if (n >= nextNum) nextNum = n + 1;
+    });
+  }
+
+  var form = document.createElement('div');
+  form.className = 'new-doc-form';
+  form.innerHTML = '<div class="settings-field"><label>Feature ID</label>' +
+    '<input type="text" id="new-doc-id" value="F' + nextNum + '" style="font-family:monospace;"></div>' +
+    '<div class="settings-field"><label>Feature Name</label>' +
+    '<input type="text" id="new-doc-name" placeholder="e.g. Teacher Support Documents"></div>' +
+    '<div style="display:flex;gap:8px;margin-top:8px;">' +
+    '<button class="action-btn" id="btn-create-doc">Create</button>' +
+    '<button class="action-btn settings-cancel" id="btn-cancel-doc">Cancel</button></div>';
+
+  var btn = document.getElementById('btn-new-feature-doc');
+  btn.parentNode.insertBefore(form, btn);
+
+  document.getElementById('btn-cancel-doc').addEventListener('click', function() { form.remove(); });
+  document.getElementById('btn-create-doc').addEventListener('click', function() {
+    var featureId = document.getElementById('new-doc-id').value.trim();
+    var featureName = document.getElementById('new-doc-name').value.trim();
+    if (!featureId || !featureName) return;
+
+    var createBtn = document.getElementById('btn-create-doc');
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating...';
+
+    apiPost(state.webAppUrl, {
+      action: 'create_feature_doc',
+      driveId: state._selectedDriveId,
+      featureId: featureId,
+      featureName: featureName,
+    }, function(response) {
+      if (response && response.ok && response.data && response.data.success) {
+        form.remove();
+        openDocDetail(response.data.doc);
+        // Refresh the list
+        if (state._selectedDriveId) _loadDocList(state._selectedDriveId);
+      } else {
+        createBtn.disabled = false;
+        createBtn.textContent = 'Create';
+        var err = (response && response.data && response.data.error) || 'Create failed';
+        alert(err);
+      }
+    });
+  });
+}
+
+function openDocDetail(doc) {
+  state._currentDoc = doc;
+  document.getElementById('docs-list').style.display = 'none';
+  document.getElementById('docs-loading').style.display = 'none';
+  document.getElementById('docs-empty').style.display = 'none';
+  document.getElementById('view-tabs').style.display = 'none';
+  document.getElementById('docs-actions').style.display = 'none';
+
+  var detail = document.getElementById('doc-detail');
+  detail.style.display = 'block';
+
+  var header = document.getElementById('doc-detail-header');
+  var docUrl = 'https://docs.google.com/document/d/' + doc.fileId + '/edit';
+  header.innerHTML = '<div class="doc-detail-title">' + escapeHtml(doc.fileName || doc.featureId) + '</div>'
+    + '<div style="padding:0 12px 8px;"><a href="' + docUrl + '" target="_blank" class="feature-doc-link" style="font-size:12px;">Open in Google Docs</a></div>';
+
+  var storiesContainer = document.getElementById('doc-detail-stories');
+  storiesContainer.innerHTML = '<div class="loading">Loading stories...</div>';
+
+  document.getElementById('btn-add-story').style.display = '';
+  document.getElementById('doc-detail-message').style.display = 'none';
+
+  apiGet(state.webAppUrl + '?action=get_feature_doc_stories&docId=' + encodeURIComponent(doc.fileId), function(response) {
+    storiesContainer.innerHTML = '';
+    if (!response || !response.ok || !response.data) {
+      storiesContainer.innerHTML = '<div style="padding:12px;color:#c5221f;">Failed to load stories</div>';
+      return;
+    }
+    state._docStories = response.data.stories || [];
+    _renderDocStories(doc.fileId);
+  });
+}
+
+function _renderDocStories(docId) {
+  var container = document.getElementById('doc-detail-stories');
+  container.innerHTML = '';
+
+  state._docStories.forEach(function(story) {
+    var card = document.createElement('div');
+    card.className = 'story-edit-card';
+
+    var header = document.createElement('div');
+    header.className = 'story-edit-header';
+    header.innerHTML = '<span class="story-id">' + escapeHtml(story.storyId) + '</span>';
+
+    var deleteBtn = document.createElement('button');
+    deleteBtn.className = 'story-delete-btn';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', (function(s, cardEl) {
+      return function(e) {
+        e.stopPropagation();
+        if (!confirm('Delete story ' + s.storyId + '?')) return;
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = 'Deleting...';
+        apiPost(state.webAppUrl, { action: 'delete_story', docId: docId, storyId: s.storyId }, function(resp) {
+          if (resp && resp.ok && resp.data && resp.data.success) {
+            cardEl.remove();
+            state._docStories = state._docStories.filter(function(st) { return st.storyId !== s.storyId; });
+          } else {
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = 'Delete';
+          }
+        });
+      };
+    })(story, card));
+    header.appendChild(deleteBtn);
+    card.appendChild(header);
+
+    var body = document.createElement('div');
+    body.className = 'story-edit-body';
+    body.textContent = story.text || '';
+    card.appendChild(body);
+
+    // Click to edit
+    body.addEventListener('click', (function(s, bodyEl, cardEl) {
+      return function() {
+        if (cardEl.querySelector('.task-detail-textarea')) return;
+        var textarea = document.createElement('textarea');
+        textarea.className = 'task-detail-textarea';
+        textarea.value = s.text || '';
+        textarea.rows = Math.max(4, (textarea.value.split('\n').length) + 1);
+        bodyEl.style.display = 'none';
+        cardEl.appendChild(textarea);
+
+        var btnRow = document.createElement('div');
+        btnRow.className = 'story-edit-actions';
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'op-edit-done';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', function() {
+          var newText = textarea.value;
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+          apiPost(state.webAppUrl, {
+            action: 'update_story',
+            docId: docId,
+            storyId: s.storyId,
+            proposedText: newText,
+          }, function(resp) {
+            if (resp && resp.ok && resp.data && resp.data.success) {
+              s.text = newText;
+              bodyEl.textContent = newText;
+              bodyEl.style.display = '';
+              textarea.remove();
+              btnRow.remove();
+            } else {
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Save';
+              var err = (resp && resp.data && resp.data.error) || 'Save failed';
+              var msgEl = document.getElementById('doc-detail-message');
+              msgEl.textContent = err;
+              msgEl.className = 'settings-message error';
+              msgEl.style.display = 'block';
+            }
+          });
+        });
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'op-edit-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', function() {
+          bodyEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+        });
+        btnRow.appendChild(saveBtn);
+        btnRow.appendChild(cancelBtn);
+        cardEl.appendChild(btnRow);
+        textarea.focus();
+      };
+    })(story, body, card));
+
+    container.appendChild(card);
+  });
+}
+
+function addNewStory() {
+  if (!state._currentDoc) return;
+  var docId = state._currentDoc.fileId;
+  var featureId = state._currentDoc.featureId || '';
+
+  // Determine next story number
+  var nextNum = 1;
+  state._docStories.forEach(function(s) {
+    var m = (s.storyId || '').match(/S(\d+)$/i);
+    if (m) {
+      var n = parseInt(m[1]);
+      if (n >= nextNum) nextNum = n + 1;
+    }
+  });
+
+  var newStoryId = featureId + 'S' + nextNum;
+  var newText = newStoryId + '. <Role> wants to <perform function> so that they <can achieve goal>\nA. <First acceptance criterion>';
+
+  var btn = document.getElementById('btn-add-story');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+
+  apiPost(state.webAppUrl, {
+    action: 'create_story',
+    docId: docId,
+    storyId: newStoryId,
+    proposedText: newText,
+  }, function(resp) {
+    btn.disabled = false;
+    btn.textContent = 'Add User Story';
+    if (resp && resp.ok && resp.data && resp.data.success) {
+      state._docStories.push({ storyId: newStoryId, storyTitle: '', text: newText });
+      _renderDocStories(docId);
+    } else {
+      var err = (resp && resp.data && resp.data.error) || 'Failed to add story';
+      var msgEl = document.getElementById('doc-detail-message');
+      msgEl.textContent = err;
+      msgEl.className = 'settings-message error';
+      msgEl.style.display = 'block';
+    }
+  });
+}
+
+function backToDocList() {
+  document.getElementById('doc-detail').style.display = 'none';
+  document.getElementById('docs-list').style.display = '';
+  document.getElementById('view-tabs').style.display = '';
+  document.getElementById('docs-actions').style.display = '';
+  state._currentDoc = null;
+  state._docStories = null;
+  if (state._selectedDriveId) _loadDocList(state._selectedDriveId);
 }
 
 // ============================================================

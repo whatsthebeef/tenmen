@@ -9,6 +9,10 @@ function doGet(e) {
   if (action === 'get_activity_log') {
     return _jsonResponse({ log: getActivityLog() });
   }
+  if (action === 'list_bugs') {
+    var bugs = getAllBugs();
+    return _jsonResponse({ bugs: bugs });
+  }
 
   // Setup form — show on first visit if not configured, or on explicit ?action=setup
   if (action === 'setup' || !isConfigured()) {
@@ -26,6 +30,18 @@ function doGet(e) {
     if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
     var tasks = getAllTasks();
     return _jsonResponse({ tasks: tasks });
+  }
+
+  if (action === 'list_feature_docs') {
+    var driveId = e.parameter.driveId || getSharedDriveId();
+    if (!driveId) return _jsonResponse({ error: 'No drive configured' });
+    var docs = discoverFeatureDocs(driveId);
+    return _jsonResponse({ docs: docs });
+  }
+  if (action === 'get_feature_doc_stories') {
+    var docId = e.parameter.docId;
+    if (!docId) return _jsonResponse({ error: 'Missing docId' });
+    return _handleGetFeatureDocStories(docId);
   }
 
   if (action === 'get_story_text') {
@@ -138,6 +154,73 @@ function doPost(e) {
       return _handleApplyOperation(payload.patchId, payload.operationIndex, payload.force);
     } else if (action === 'dismiss_operation') {
       return _handleDismissOperation(payload.patchId, payload.operationIndex);
+    } else if (action === 'create_feature_doc') {
+      return _handleCreateFeatureDoc(payload.driveId, payload.featureId, payload.featureName);
+    } else if (action === 'update_story') {
+      if (!payload.docId || !payload.storyId) return _jsonResponse({ error: 'docId and storyId required' }, 400);
+      try {
+        applyStoryUpdate(payload.docId, payload.storyId, payload.proposedText, null, true);
+        return _jsonResponse({ success: true });
+      } catch (e) {
+        return _jsonResponse({ success: false, error: e.message });
+      }
+    } else if (action === 'create_story') {
+      if (!payload.docId || !payload.proposedText) return _jsonResponse({ error: 'docId and proposedText required' }, 400);
+      try {
+        applyStoryCreate(payload.docId, payload.proposedText, payload.storyId, true);
+        return _jsonResponse({ success: true });
+      } catch (e) {
+        return _jsonResponse({ success: false, error: e.message });
+      }
+    } else if (action === 'delete_story') {
+      if (!payload.docId || !payload.storyId) return _jsonResponse({ error: 'docId and storyId required' }, 400);
+      try {
+        applyStoryDelete(payload.docId, payload.storyId, null, true);
+        return _jsonResponse({ success: true });
+      } catch (e) {
+        return _jsonResponse({ success: false, error: e.message });
+      }
+    } else if (action === 'create_bug') {
+      var bugId = addBug({
+        steps_to_reproduce: payload.steps_to_reproduce || '',
+        expected: payload.expected || '',
+        actual: payload.actual || '',
+        environment: payload.environment || '',
+        reporter: payload.reporter || '',
+        notes: payload.notes || '',
+        additional_notes: payload.additional_notes || '',
+      });
+      return _jsonResponse({ success: true, bugId: bugId });
+    } else if (action === 'update_bug') {
+      if (!payload.bugId) return _jsonResponse({ error: 'bugId is required' }, 400);
+      var bugUpdates = {};
+      if (payload.steps_to_reproduce !== undefined) bugUpdates.steps_to_reproduce = payload.steps_to_reproduce;
+      if (payload.expected !== undefined) bugUpdates.expected = payload.expected;
+      if (payload.actual !== undefined) bugUpdates.actual = payload.actual;
+      if (payload.environment !== undefined) bugUpdates.environment = payload.environment;
+      if (payload.reporter !== undefined) bugUpdates.reporter = payload.reporter;
+      if (payload.notes !== undefined) bugUpdates.notes = payload.notes;
+      if (payload.additional_notes !== undefined) bugUpdates.additional_notes = payload.additional_notes;
+      var bugUpdated = updateBug(payload.bugId, bugUpdates);
+      if (!bugUpdated) return _jsonResponse({ error: 'Bug not found: ' + payload.bugId }, 404);
+      return _jsonResponse({ success: true, bugId: payload.bugId });
+    } else if (action === 'delete_bug') {
+      if (!payload.bugId) return _jsonResponse({ error: 'bugId is required' }, 400);
+      var bugDeleted = deleteBug(payload.bugId);
+      if (!bugDeleted) return _jsonResponse({ error: 'Bug not found: ' + payload.bugId }, 404);
+      return _jsonResponse({ success: true, bugId: payload.bugId });
+    } else if (action === 'update_task') {
+      if (!payload.taskId) return _jsonResponse({ error: 'taskId is required' }, 400);
+      var updates = {};
+      if (payload.name !== undefined) updates.name = payload.name;
+      if (payload.description !== undefined) updates.description = payload.description;
+      if (payload.acceptance_criteria !== undefined) updates.acceptance_criteria = payload.acceptance_criteria;
+      if (payload.notes !== undefined) updates.notes = payload.notes;
+      if (payload.status !== undefined) updates.status = payload.status;
+      if (payload.additional_notes !== undefined) updates.additional_notes = payload.additional_notes;
+      var updated = updateTask(payload.taskId, updates);
+      if (!updated) return _jsonResponse({ error: 'Task not found: ' + payload.taskId }, 404);
+      return _jsonResponse({ success: true, taskId: payload.taskId });
     } else if (action === 'identify_features') {
       try {
         var idResult = identifyFeaturesFromSummary();
@@ -495,6 +578,104 @@ function _applyTaskPatchOperation(op) {
     deleteTask(op.id);
     Logger.log('Task patch: deleted ' + op.id);
   }
+}
+
+function _handleGetFeatureDocStories(docId) {
+  var doc = Docs.Documents.get(docId);
+  var content = doc.body.content || [];
+  var stories = [];
+  var storyPattern = /^T?(F\d+S\d+)\.?\s*(.*)/i;
+
+  for (var i = 0; i < content.length; i++) {
+    var el = content[i];
+    if (!el.paragraph) continue;
+    var style = el.paragraph.paragraphStyle || {};
+    if (style.namedStyleType !== 'HEADING_3') continue;
+
+    var text = _extractParagraphText(el.paragraph);
+    var match = storyPattern.exec(text);
+    if (!match) continue;
+
+    var storyId = match[1].toUpperCase();
+    var storyTitle = match[2] || '';
+
+    // Find end of this story (next H3 or end of doc)
+    var storyEnd = -1;
+    for (var j = i + 1; j < content.length; j++) {
+      var nextEl = content[j];
+      if (!nextEl.paragraph) continue;
+      var nextStyle = nextEl.paragraph.paragraphStyle || {};
+      if (nextStyle.namedStyleType === 'HEADING_3') {
+        storyEnd = nextEl.startIndex;
+        break;
+      }
+    }
+    if (storyEnd === -1) {
+      var lastEl = content[content.length - 1];
+      storyEnd = lastEl.endIndex - 1;
+    }
+
+    // Read full story text
+    var storyText = '';
+    for (var k = i; k < content.length; k++) {
+      var sEl = content[k];
+      if (!sEl.paragraph) continue;
+      if (sEl.startIndex < el.startIndex) continue;
+      if (sEl.startIndex >= storyEnd) break;
+      var pText = _extractParagraphText(sEl.paragraph);
+      if (storyText) storyText += '\n';
+      storyText += pText;
+    }
+
+    stories.push({
+      storyId: storyId,
+      storyTitle: storyTitle,
+      text: storyText,
+    });
+  }
+
+  return _jsonResponse({ stories: stories, title: doc.title || '' });
+}
+
+function _handleCreateFeatureDoc(driveId, featureId, featureName) {
+  if (!driveId) driveId = getSharedDriveId();
+  if (!driveId) return _jsonResponse({ error: 'No drive configured' }, 400);
+  if (!featureId || !featureName) return _jsonResponse({ error: 'featureId and featureName required' }, 400);
+
+  var docName = featureId + ' ' + featureName;
+
+  // Check it doesn't already exist
+  var existing = findFeatureDocById(driveId, featureId);
+  if (existing) return _jsonResponse({ error: 'Feature doc already exists: ' + existing.fileName });
+
+  // Create the doc
+  var file = Drive.Files.create({
+    name: docName,
+    mimeType: 'application/vnd.google-apps.document',
+    parents: [driveId],
+  }, null, { supportsAllDrives: true });
+
+  // Write template content
+  var templateText = featureId + 'S1. <Role> wants to <perform function> so that they <can achieve goal>\n' +
+    'A. <First acceptance criterion>\n' +
+    'B. <Second acceptance criterion>\n';
+
+  Docs.Documents.batchUpdate({
+    requests: [
+      { insertText: { location: { index: 1 }, text: templateText } },
+    ]
+  }, file.id);
+
+  // Style the first line as H3
+  _fixStoryParagraphStyles(file.id, 1, templateText);
+
+  var docUrl = 'https://docs.google.com/document/d/' + file.id + '/edit';
+  logActivity('Created feature doc: ' + docName);
+
+  return _jsonResponse({
+    success: true,
+    doc: { featureId: featureId, fileId: file.id, fileName: docName, url: docUrl },
+  });
 }
 
 function _allOperationsResolved(operations) {

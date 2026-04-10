@@ -511,11 +511,10 @@ span.diff-add {
   display: flex;
   background: #fff;
   border-bottom: 1px solid #e0e0e0;
-  padding: 6px 0 0 0;
 }
 .view-tab {
   flex: 1;
-  padding: 10px 0;
+  padding: 16px 0 10px 0;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -527,6 +526,12 @@ span.diff-add {
 .view-tab:hover {
   color: #202124;
   background: #f8f9fa;
+}
+.view-tab-icon {
+  flex: 0;
+  padding: 10px 14px;
+  font-size: 20px;
+  line-height: 1;
 }
 .view-tab.active {
   color: #1a73e8;
@@ -628,6 +633,20 @@ span.diff-add {
 .patch-index-review:hover {
   background: #d2e3fc;
 }
+.patch-index-source {
+  font-size: 10px;
+  color: #80868b;
+  text-decoration: none;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+.patch-index-source:hover {
+  color: #1a73e8;
+  text-decoration: underline;
+}
 .patch-index-delete {
   background: transparent;
   border: none;
@@ -673,6 +692,225 @@ span.diff-add {
 }
 .activity-log-entry.error {
   color: #c5221f;
+}
+
+/* Docs list */
+.doc-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f3f4;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.doc-item:hover {
+  background: #f8f9fa;
+}
+.doc-feature-id {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a73e8;
+  flex-shrink: 0;
+}
+.doc-name {
+  font-size: 13px;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Doc detail */
+.doc-detail-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: #202124;
+  padding: 12px 12px 4px;
+}
+.story-edit-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin: 8px 12px;
+  overflow: hidden;
+}
+.story-edit-header {
+  padding: 10px 12px;
+  background: #f1f3f4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 500;
+  font-size: 13px;
+}
+.story-edit-header .story-id {
+  font-family: monospace;
+  color: #1a73e8;
+}
+.story-edit-body {
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  min-height: 30px;
+}
+.story-edit-body:empty::after {
+  content: '(empty)';
+  color: #80868b;
+  font-style: italic;
+}
+.story-edit-actions {
+  padding: 6px 12px 10px;
+  display: flex;
+  gap: 6px;
+}
+.story-delete-btn {
+  background: transparent;
+  border: none;
+  color: #c5221f;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.story-delete-btn:hover {
+  background: #fce8e6;
+  border-radius: 4px;
+}
+
+/* New feature doc dialog */
+.new-doc-form {
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin: 8px 12px;
+}
+
+/* Bug list */
+.bug-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f3f4;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bug-item:hover {
+  background: #f8f9fa;
+}
+.bug-id {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c5221f;
+  flex-shrink: 0;
+}
+.bug-summary {
+  font-size: 13px;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Task filter */
+.task-filter {
+  padding: 8px 12px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+  position: relative;
+}
+.task-filter input {
+  width: 100%;
+  padding: 6px 28px 6px 8px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: monospace;
+  box-sizing: border-box;
+}
+.task-filter input:focus {
+  outline: none;
+  border-color: #1a73e8;
+}
+.task-filter-clear {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #5f6368;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  display: none;
+}
+.task-filter-clear:hover {
+  color: #202124;
+}
+
+/* Task detail */
+.task-detail-field {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f3f4;
+}
+.task-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5f6368;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.task-detail-value {
+  font-size: 13px;
+  color: #202124;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  min-height: 20px;
+}
+.task-detail-value:empty::after {
+  content: '(empty)';
+  color: #80868b;
+  font-style: italic;
+}
+.task-detail-textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #1a73e8;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+.task-detail-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.task-detail-actions {
+  padding: 10px 12px;
+}
+.task-detail-id {
+  font-family: monospace;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a73e8;
+  padding: 12px 12px 4px;
+}
+.task-detail-status {
+  padding: 4px 12px 12px;
 }
 
 /* Loading */

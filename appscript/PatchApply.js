@@ -235,10 +235,10 @@ function findStorySection(docId, storyId) {
 
   if (storyStart === -1) return null;
 
-  // If no next heading found, use end of document
+  // If no next heading found, use end of document (minus trailing newline which can't be deleted)
   if (storyEnd === -1) {
     var lastEl = content[content.length - 1];
-    storyEnd = lastEl.endIndex;
+    storyEnd = lastEl.endIndex - 1;
   }
 
   return { startIndex: storyStart, endIndex: storyEnd };
