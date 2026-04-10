@@ -54,6 +54,14 @@ function doGet(e) {
   if (action === 'get_task_row') {
     return _handleGetTaskRow(e);
   }
+  if (action === 'get_bug_data') {
+    if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
+    var bugId = e.parameter.bugId;
+    if (!bugId) return _jsonResponse({ error: 'Missing bugId' });
+    var bug = getBugById(bugId);
+    if (!bug) return _jsonResponse({ error: 'Bug not found: ' + bugId, bug: null });
+    return _jsonResponse({ bug: bug });
+  }
 
   // Unknown action or no action
   if (!action) {
