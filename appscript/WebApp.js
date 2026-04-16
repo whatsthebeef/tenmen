@@ -13,6 +13,10 @@ function doGet(e) {
     var bugs = getAllBugs();
     return _jsonResponse({ bugs: bugs });
   }
+  if (action === 'list_tasks') {
+    var tasks = getAllTasks();
+    return _jsonResponse({ tasks: tasks });
+  }
 
   // Setup form — show on first visit if not configured, or on explicit ?action=setup
   if (action === 'setup' || !isConfigured()) {
@@ -25,11 +29,6 @@ function doGet(e) {
   }
   if (action === 'get_patch') {
     return _handleGetPatch(e);
-  }
-  if (action === 'list_tasks') {
-    if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
-    var tasks = getAllTasks();
-    return _jsonResponse({ tasks: tasks });
   }
 
   if (action === 'list_feature_docs') {
@@ -146,14 +145,12 @@ function doPost(e) {
       return _jsonResponse({ success: true, projects: getProjects() });
     }
 
-    if (!isConfigured()) {
-      return _jsonResponse({ error: 'Not configured. Use the extension side panel Settings to configure.' }, 503);
-    }
-
     if (action === 'claim_next') {
+      if (!isConfigured()) return _jsonResponse({ error: 'Not configured' }, 503);
       if (!_checkApiKey(payload.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
       return _handleClaimNext();
     } else if (action === 'finish_task') {
+      if (!isConfigured()) return _jsonResponse({ error: 'Not configured' }, 503);
       if (!_checkApiKey(payload.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
       return _handleFinishTask(payload.taskId);
     } else if (action === 'delete_patch') {
@@ -164,6 +161,15 @@ function doPost(e) {
       return _handleDismissOperation(payload.patchId, payload.operationIndex);
     } else if (action === 'create_feature_doc') {
       return _handleCreateFeatureDoc(payload.driveId, payload.featureId, payload.featureName);
+    } else if (action === 'delete_feature_doc') {
+      if (!payload.fileId) return _jsonResponse({ error: 'fileId required' }, 400);
+      try {
+        Drive.Files.update({ trashed: true }, payload.fileId, null, { supportsAllDrives: true });
+        logActivity('Deleted feature doc: ' + (payload.fileName || payload.fileId));
+        return _jsonResponse({ success: true });
+      } catch (e) {
+        return _jsonResponse({ success: false, error: e.message });
+      }
     } else if (action === 'update_story') {
       if (!payload.docId || !payload.storyId) return _jsonResponse({ error: 'docId and storyId required' }, 400);
       try {
@@ -189,25 +195,39 @@ function doPost(e) {
         return _jsonResponse({ success: false, error: e.message });
       }
     } else if (action === 'create_bug') {
+      var bugName = payload.name || '';
+      if (!bugName && (payload.steps_to_reproduce || payload.actual)) {
+        try {
+          bugName = callGeminiForBugName(payload.steps_to_reproduce || '', payload.actual || '');
+        } catch (e) {
+          Logger.log('Bug name generation failed: ' + e.message);
+          logActivity('Bug name generation failed: ' + e.message);
+          bugName = '';
+        }
+      }
       var bugId = addBug({
+        name: bugName,
         steps_to_reproduce: payload.steps_to_reproduce || '',
         expected: payload.expected || '',
         actual: payload.actual || '',
+        notes: payload.notes || '',
+        status: payload.status || 'To Do',
         environment: payload.environment || '',
         reporter: payload.reporter || '',
-        notes: payload.notes || '',
         additional_notes: payload.additional_notes || '',
       });
-      return _jsonResponse({ success: true, bugId: bugId });
+      return _jsonResponse({ success: true, bugId: bugId, name: bugName });
     } else if (action === 'update_bug') {
       if (!payload.bugId) return _jsonResponse({ error: 'bugId is required' }, 400);
       var bugUpdates = {};
+      if (payload.name !== undefined) bugUpdates.name = payload.name;
       if (payload.steps_to_reproduce !== undefined) bugUpdates.steps_to_reproduce = payload.steps_to_reproduce;
       if (payload.expected !== undefined) bugUpdates.expected = payload.expected;
       if (payload.actual !== undefined) bugUpdates.actual = payload.actual;
+      if (payload.notes !== undefined) bugUpdates.notes = payload.notes;
+      if (payload.status !== undefined) bugUpdates.status = payload.status;
       if (payload.environment !== undefined) bugUpdates.environment = payload.environment;
       if (payload.reporter !== undefined) bugUpdates.reporter = payload.reporter;
-      if (payload.notes !== undefined) bugUpdates.notes = payload.notes;
       if (payload.additional_notes !== undefined) bugUpdates.additional_notes = payload.additional_notes;
       var bugUpdated = updateBug(payload.bugId, bugUpdates);
       if (!bugUpdated) return _jsonResponse({ error: 'Bug not found: ' + payload.bugId }, 404);
@@ -243,7 +263,9 @@ function doPost(e) {
         if (normResult.error) return _jsonResponse({ success: false, error: normResult.error });
         return _jsonResponse({ success: true, data: normResult });
       } catch (normErr) {
-        return _jsonResponse({ success: false, error: normErr.message });
+        var normMsg = normErr.message || String(normErr);
+        logActivity('Normalize error for ' + payload.featureId + ': ' + normMsg);
+        return _jsonResponse({ success: false, error: normMsg });
       }
     } else if (action === 'generate_patch_plan') {
       try {
@@ -251,7 +273,9 @@ function doPost(e) {
         if (gpResult.error) return _jsonResponse({ success: false, error: gpResult.error });
         return _jsonResponse({ success: true, step: gpResult.step });
       } catch (gpErr) {
-        return _jsonResponse({ success: false, error: gpErr.message });
+        var gpMsg = gpErr.message || String(gpErr);
+        logActivity('Patch plan error for ' + payload.featureId + ': ' + gpMsg);
+        return _jsonResponse({ success: false, error: gpMsg });
       }
     } else if (action === 'update_technical_notes') {
       try {

@@ -104,13 +104,16 @@ function getChangedFormulationDocs(driveId, since) {
   }
 
   // Build new known set and detect changes
-  // A file is "changed" only if it's new or its modifiedTime differs from what we stored
+  // A file is "changed" if: new, modifiedTime differs, or still has an active debounce entry
   var newKnown = {};
   var changes = [];
 
   allFiles.forEach(function(f) {
     newKnown[f.id] = f.modifiedTime;
-    if (!knownIds[f.id] || knownIds[f.id] !== f.modifiedTime) {
+    var isNew = !knownIds[f.id];
+    var isModified = knownIds[f.id] && knownIds[f.id] !== f.modifiedTime;
+    var isDebouncing = isFileDebouncing(f.id);
+    if (isNew || isModified || isDebouncing) {
       changes.push({ fileId: f.id, fileName: f.name });
     }
   });
@@ -120,27 +123,45 @@ function getChangedFormulationDocs(driveId, since) {
 }
 
 function getChangedUserStoryDocs(driveId, since) {
-  var sinceStr = since.toISOString();
-  var changes = [];
+  // List all docs in the drive root
+  var allFiles = [];
   var pageToken = null;
-
-  // Only check docs directly in the drive root (parent = driveId)
   do {
     var resp = Drive.Files.list({
-      q: "'" + driveId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and modifiedTime > '" + sinceStr + "' and trashed = false",
-      fields: 'nextPageToken,files(id,name)',
+      q: "'" + driveId + "' in parents and mimeType = '" + GOOGLE_DOCS_MIME + "' and trashed = false",
+      fields: 'nextPageToken,files(id,name,modifiedTime)',
       corpora: 'drive',
       driveId: driveId,
       pageSize: 100,
       pageToken: pageToken,
       ..._SD,
     });
-    (resp.files || []).forEach(function(f) {
-      changes.push({ fileId: f.id, fileName: f.name });
-    });
+    (resp.files || []).forEach(function(f) { allFiles.push(f); });
     pageToken = resp.nextPageToken;
   } while (pageToken);
 
+  // Compare against known set
+  var knownKey = 'known_featuredocs_' + driveId;
+  var knownJson = getProp(knownKey);
+  var knownIds = {};
+  if (knownJson) {
+    try { knownIds = JSON.parse(knownJson); } catch (e) { knownIds = {}; }
+  }
+
+  var newKnown = {};
+  var changes = [];
+
+  allFiles.forEach(function(f) {
+    newKnown[f.id] = f.modifiedTime;
+    var isNew = !knownIds[f.id];
+    var isModified = knownIds[f.id] && knownIds[f.id] !== f.modifiedTime;
+    var isDebouncing = isFileDebouncing(f.id);
+    if (isNew || isModified || isDebouncing) {
+      changes.push({ fileId: f.id, fileName: f.name });
+    }
+  });
+
+  setProp(knownKey, JSON.stringify(newKnown));
   return changes;
 }
 
@@ -318,17 +339,27 @@ function listAllPatchFiles(driveId) {
   var folderId = findFolderByName(driveId, getFolderName('PATCHES_FOLDER_NAME'));
   if (!folderId) return [];
 
-  var resp = Drive.Files.list({
-    q: "'" + folderId + "' in parents and name contains '-patch-' and trashed = false",
-    fields: 'files(id,name,createdTime)',
-    orderBy: 'createdTime asc',
-    corpora: 'drive',
-    driveId: driveId,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-  });
+  var allFiles = [];
+  var pageToken = null;
+  do {
+    var resp = Drive.Files.list({
+      q: "'" + folderId + "' in parents and name contains '-patch-' and trashed = false",
+      fields: 'nextPageToken,files(id,name,createdTime)',
+      corpora: 'drive',
+      driveId: driveId,
+      pageSize: 100,
+      pageToken: pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    (resp.files || []).forEach(function(f) { allFiles.push(f); });
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
 
-  return (resp.files || []).map(function(f) {
+  // Sort client-side — Drive API orderBy is silently ignored for Shared Drives
+  allFiles.sort(function(a, b) { return new Date(a.createdTime) - new Date(b.createdTime); });
+
+  return allFiles.map(function(f) {
     var featureMatch = f.name.match(/^(F\d+)-(?:task-)?patch-/i);
     var isTaskPatch = f.name.indexOf('-task-patch-') !== -1;
     var entry = {
@@ -349,6 +380,12 @@ function listAllPatchFiles(driveId) {
       var ops = content.operations || [];
       entry.operationCount = ops.length;
       entry.pendingCount = ops.filter(function(op) { return !op._applied && !op._dismissed; }).length;
+
+      // Auto-delete fully resolved patches
+      if (entry.pendingCount === 0 && entry.operationCount > 0) {
+        try { deletePatchFile(f.id); } catch (delErr) { /* non-fatal */ }
+        return null;
+      }
     } catch (e) {
       entry.targetDocName = '';
       entry.sourceFileName = '';
@@ -356,7 +393,7 @@ function listAllPatchFiles(driveId) {
       entry.pendingCount = 0;
     }
     return entry;
-  });
+  }).filter(function(e) { return e !== null; });
 }
 
 /**
@@ -370,14 +407,16 @@ function listPatchFiles(driveId, featureId) {
   var resp = Drive.Files.list({
     q: "'" + folderId + "' in parents and name contains '" + namePrefix + "' and trashed = false",
     fields: 'files(id,name,createdTime)',
-    orderBy: 'createdTime desc',
     corpora: 'drive',
     driveId: driveId,
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
   });
 
-  return (resp.files || []).map(function(f) {
+  var files = (resp.files || []).slice();
+  files.sort(function(a, b) { return new Date(b.createdTime) - new Date(a.createdTime); });
+
+  return files.map(function(f) {
     return { patchId: f.name.replace('.json', ''), fileId: f.id, fileName: f.name, created: f.createdTime };
   });
 }

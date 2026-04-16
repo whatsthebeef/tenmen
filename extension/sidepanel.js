@@ -195,6 +195,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   document.getElementById('btn-patch-back').addEventListener('click', backToPatchIndex);
+  document.getElementById('btn-patch-delete').addEventListener('click', deleteCurrentPatch);
   document.getElementById('btn-task-back').addEventListener('click', backToTaskList);
   document.getElementById('btn-task-save').addEventListener('click', saveTaskDetail);
   document.getElementById('btn-doc-back').addEventListener('click', backToDocList);
@@ -362,10 +363,11 @@ function loadPatch(patchInfo, callback) {
 
 function renderPatchIndex() {
   if (state.activeView !== 'patches') return;
+  // Don't overwrite the detail view if it's showing
+  if (document.getElementById('patch-back').style.display !== 'none') return;
 
   document.getElementById('source-section').style.display = 'none';
   document.getElementById('patch-list').innerHTML = '';
-  document.getElementById('patch-back').style.display = 'none';
   document.getElementById('view-tabs').style.display = '';
   var indexContainer = document.getElementById('patch-index');
   indexContainer.innerHTML = '';
@@ -376,70 +378,90 @@ function renderPatchIndex() {
     return;
   }
 
-  patches.forEach(function(p) {
-    var isTask = p.patchType === 'task';
-    var targetName = p.targetDocName || (isTask ? 'Tenmen Tasks' : p.featureId);
-    var targetUrl = p.targetDocUrl || p.targetSpreadsheetUrl || '';
-    var sourceName = p.sourceFileName || 'Unknown';
+  var featurePatches = patches.filter(function(p) { return p.patchType !== 'task'; });
+  var taskPatches = patches.filter(function(p) { return p.patchType === 'task'; });
 
-    var card = document.createElement('div');
-    card.className = 'patch-index-card';
+  if (featurePatches.length) {
+    var heading = document.createElement('div');
+    heading.className = 'patch-index-section-heading';
+    heading.textContent = 'Feature Document Patches';
+    indexContainer.appendChild(heading);
+    featurePatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
+  }
 
-    var reviewBtn = document.createElement('button');
-    reviewBtn.className = 'patch-index-review';
-    reviewBtn.textContent = 'Review ' + targetName + ' Patch';
-    reviewBtn.addEventListener('click', (function(patchInfo, docUrl) {
-      return function() { openPatchDetail(patchInfo, docUrl); };
-    })(p, targetUrl));
-    card.appendChild(reviewBtn);
+  if (taskPatches.length) {
+    var heading2 = document.createElement('div');
+    heading2.className = 'patch-index-section-heading';
+    heading2.textContent = 'Task List Patches';
+    indexContainer.appendChild(heading2);
+    taskPatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
+  }
+}
 
-    var footer = document.createElement('div');
-    footer.className = 'patch-index-footer';
+function _buildPatchCard(p) {
+  var isTask = p.patchType === 'task';
+  var targetName = p.targetDocName || (isTask ? 'Tenmen Tasks' : p.featureId);
+  var targetUrl = p.targetDocUrl || p.targetSpreadsheetUrl || '';
+  var sourceName = p.sourceFileName || 'Unknown';
 
-    var meta = document.createElement('span');
-    meta.className = 'patch-index-meta';
-    meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending';
-    footer.appendChild(meta);
+  var card = document.createElement('div');
+  card.className = 'patch-index-card';
 
-    if (p.sourceFileUrl) {
-      var sourceLink = document.createElement('a');
-      sourceLink.className = 'patch-index-source';
-      sourceLink.href = p.sourceFileUrl;
-      sourceLink.target = '_blank';
-      sourceLink.textContent = sourceName;
-      sourceLink.addEventListener('click', function(e) { e.stopPropagation(); });
-      footer.appendChild(sourceLink);
-    }
+  var reviewBtn = document.createElement('button');
+  reviewBtn.className = 'patch-index-review';
+  reviewBtn.textContent = 'Review ' + targetName + ' Patch';
+  reviewBtn.addEventListener('click', (function(patchInfo, docUrl) {
+    return function() { openPatchDetail(patchInfo, docUrl); };
+  })(p, targetUrl));
+  card.appendChild(reviewBtn);
 
-    var deleteBtn = document.createElement('button');
-    deleteBtn.className = 'patch-index-delete';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', (function(patchId, cardEl) {
-      return function(e) {
-        e.stopPropagation();
-        if (!confirm('Delete this patch?')) return;
-        deleteBtn.disabled = true;
-        deleteBtn.textContent = 'Deleting...';
-        apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
-          if (response && response.ok && response.data && response.data.success) {
-            cardEl.remove();
-            state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
-            delete state.loadedPatches[patchId];
-          } else {
-            deleteBtn.disabled = false;
-            deleteBtn.textContent = 'Delete';
-          }
-        });
-      };
-    })(p.patchId, card));
-    footer.appendChild(deleteBtn);
-    card.appendChild(footer);
+  var footer = document.createElement('div');
+  footer.className = 'patch-index-footer';
 
-    indexContainer.appendChild(card);
-  });
+  var meta = document.createElement('span');
+  meta.className = 'patch-index-meta';
+  meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending';
+  footer.appendChild(meta);
+
+  if (p.sourceFileUrl) {
+    var sourceLink = document.createElement('a');
+    sourceLink.className = 'patch-index-source';
+    sourceLink.href = p.sourceFileUrl;
+    sourceLink.target = '_blank';
+    sourceLink.textContent = sourceName;
+    sourceLink.addEventListener('click', function(e) { e.stopPropagation(); });
+    footer.appendChild(sourceLink);
+  }
+
+  var deleteBtn = document.createElement('button');
+  deleteBtn.className = 'patch-index-delete';
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.addEventListener('click', (function(patchId, cardEl) {
+    return function(e) {
+      e.stopPropagation();
+      if (!confirm('Delete this patch?')) return;
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = 'Deleting...';
+      apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
+        if (response && response.ok && response.data && response.data.success) {
+          cardEl.remove();
+          state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
+          delete state.loadedPatches[patchId];
+        } else {
+          deleteBtn.disabled = false;
+          deleteBtn.textContent = 'Delete';
+        }
+      });
+    };
+  })(p.patchId, card));
+  footer.appendChild(deleteBtn);
+  card.appendChild(footer);
+
+  return card;
 }
 
 function openPatchDetail(patchInfo, docUrl) {
+  state._currentPatchId = patchInfo.patchId;
   // Open the target document in the current tab
   if (docUrl) {
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
@@ -490,9 +512,31 @@ function _renderDetailedPatch(loaded) {
   }
 }
 
+function deleteCurrentPatch() {
+  var patchId = state._currentPatchId;
+  if (!patchId) return;
+  if (!confirm('Delete this patch?')) return;
+
+  var btn = document.getElementById('btn-patch-delete');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+
+  apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
+    btn.disabled = false;
+    btn.textContent = 'Delete Patch';
+    if (response && response.ok && response.data && response.data.success) {
+      state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
+      delete state.loadedPatches[patchId];
+      backToPatchIndex();
+    }
+  });
+}
+
 function backToPatchIndex() {
   document.getElementById('patch-list').innerHTML = '';
+  document.getElementById('patch-back').style.display = 'none';
   document.getElementById('source-section').style.display = 'none';
+  document.getElementById('view-tabs').style.display = '';
   state.currentPatch = null;
 
   // Update allPatches from local cache — recalculate counts, remove fully resolved
@@ -666,12 +710,12 @@ function renderTaskOperation(op, index, patchId) {
   }
   div.appendChild(header);
 
-  // Fields
+  // Fields — `key` is the live task field name; `opKey` is the operation field name
   var fields = [
-    { label: 'Summary', key: 'summary', proposed: op.summary },
-    { label: 'Description', key: 'description', proposed: op.description },
-    { label: 'Acceptance Criteria', key: 'acceptance_criteria', proposed: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || '') },
-    { label: 'Notes', key: 'notes', proposed: op.notes },
+    { label: 'Summary', key: 'name', opKey: 'summary', proposed: op.summary },
+    { label: 'Description', key: 'description', opKey: 'description', proposed: op.description },
+    { label: 'Acceptance Criteria', key: 'acceptance_criteria', opKey: 'acceptance_criteria', proposed: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || '') },
+    { label: 'Notes', key: 'notes', opKey: 'notes', proposed: op.notes },
   ];
 
   if (op.type === 'delete') {
@@ -710,7 +754,7 @@ function renderTaskOperation(op, index, patchId) {
           valueDiv.className = 'task-field-diff';
           valueDiv.innerHTML = buildLineDiff(liveVal, proposedVal);
         }
-        _makeTaskFieldEditable(valueDiv, op, f.key, f.proposed, liveVal);
+        _makeTaskFieldEditable(valueDiv, op, f.opKey, f.proposed, liveVal);
         fieldDiv.appendChild(valueDiv);
         fieldsContainer.appendChild(fieldDiv);
       });
@@ -729,7 +773,7 @@ function renderTaskOperation(op, index, patchId) {
       var valueDiv = document.createElement('div');
       valueDiv.className = 'diff-add';
       valueDiv.textContent = f.proposed;
-      _makeTaskFieldEditable(valueDiv, op, f.key, f.proposed, '');
+      _makeTaskFieldEditable(valueDiv, op, f.opKey, f.proposed, '');
       fieldDiv.appendChild(valueDiv);
       div.appendChild(fieldDiv);
     });
@@ -1020,6 +1064,10 @@ function forceApplyOperation(patchId, operationIndex, opDiv, op) {
   }, function(response) {
     var success = response && response.ok && response.data && response.data.success;
     if (success) {
+      var loaded = state.loadedPatches[patchId];
+      if (loaded && loaded.data && loaded.data.operations && loaded.data.operations[operationIndex]) {
+        loaded.data.operations[operationIndex]._applied = true;
+      }
       opDiv.style.display = 'none';
       checkAllDone();
     } else {
@@ -1358,6 +1406,7 @@ function fetchTasks() {
   apiGet(state.webAppUrl + '?action=list_tasks', function(response) {
     document.getElementById('tasks-loading').style.display = 'none';
     if (state.activeView !== 'tasks') return;
+    if (document.getElementById('task-detail').style.display !== 'none') return;
     if (!response || !response.ok || !response.data || response.data.error) {
       if (state.cachedTasks) return; // keep showing cached data on refresh error
       var errSteps = ['Failed to load tasks'];
@@ -1397,8 +1446,6 @@ function renderTaskList(tasks) {
     }
     return (a.id || '').localeCompare(b.id || '');
   });
-  document.getElementById('task-detail').style.display = 'none';
-  document.getElementById('view-tabs').style.display = '';
   tasks.forEach(function(task) {
     var div = document.createElement('div');
     div.className = 'task-item';
@@ -1427,6 +1474,16 @@ function renderTaskList(tasks) {
 
     container.appendChild(div);
   });
+
+  // Re-apply filter
+  var filter = document.getElementById('task-filter-input').value.trim().toUpperCase();
+  if (filter) {
+    container.querySelectorAll('.task-item').forEach(function(item) {
+      var idEl = item.querySelector('.task-id');
+      var taskId = idEl ? idEl.textContent.toUpperCase() : '';
+      item.style.display = taskId.indexOf(filter) === 0 ? '' : 'none';
+    });
+  }
 }
 
 // ============================================================
@@ -1451,6 +1508,7 @@ function openTaskDetail(task) {
   document.getElementById('tasks-empty').style.display = 'none';
   document.getElementById('view-tabs').style.display = 'none';
   document.getElementById('task-detail-message').style.display = 'none';
+  document.querySelector('#view-tasks .task-filter').style.display = 'none';
 
   var detail = document.getElementById('task-detail');
   detail.style.display = 'block';
@@ -1475,7 +1533,7 @@ function openTaskDetail(task) {
     fieldDiv.appendChild(label);
 
     if (field.key === 'status') {
-      // Status field — render as select
+      // Status field — render as select, auto-save on change
       var select = document.createElement('select');
       select.className = 'task-detail-textarea';
       select.style.resize = 'none';
@@ -1489,7 +1547,7 @@ function openTaskDetail(task) {
       select.addEventListener('change', function() {
         state._editingTask[field.key] = select.value;
         state._taskDirty = true;
-        document.getElementById('btn-task-save').style.display = '';
+        saveTaskDetail();
       });
       fieldDiv.appendChild(select);
       content.appendChild(fieldDiv);
@@ -1514,17 +1572,17 @@ function openTaskDetail(task) {
 
         var btnRow = document.createElement('div');
         btnRow.className = 'task-detail-edit-actions';
-        var doneBtn = document.createElement('button');
-        doneBtn.className = 'op-edit-done';
-        doneBtn.textContent = 'Done';
-        doneBtn.addEventListener('click', function() {
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'op-edit-done';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', function() {
           state._editingTask[f.key] = textarea.value;
           valEl.textContent = textarea.value;
           valEl.style.display = '';
           textarea.remove();
           btnRow.remove();
           state._taskDirty = true;
-          document.getElementById('btn-task-save').style.display = '';
+          saveTaskDetail();
         });
         var cancelBtn = document.createElement('button');
         cancelBtn.className = 'op-edit-cancel';
@@ -1534,7 +1592,7 @@ function openTaskDetail(task) {
           textarea.remove();
           btnRow.remove();
         });
-        btnRow.appendChild(doneBtn);
+        btnRow.appendChild(saveBtn);
         btnRow.appendChild(cancelBtn);
         fieldContainer.appendChild(btnRow);
         textarea.focus();
@@ -1543,22 +1601,10 @@ function openTaskDetail(task) {
 
     content.appendChild(fieldDiv);
   });
-
-  document.getElementById('btn-task-save').style.display = 'none';
 }
 
 function saveTaskDetail() {
   if (!state._editingTask || !state._taskDirty) return;
-  if (document.querySelector('#task-detail-content .task-detail-textarea')) {
-    var msgEl = document.getElementById('task-detail-message');
-    msgEl.textContent = 'Finish editing all fields before saving.';
-    msgEl.className = 'settings-message error';
-    msgEl.style.display = 'block';
-    return;
-  }
-  var btn = document.getElementById('btn-task-save');
-  btn.disabled = true;
-  btn.textContent = 'Saving...';
   var msgEl = document.getElementById('task-detail-message');
   msgEl.style.display = 'none';
 
@@ -1568,14 +1614,11 @@ function saveTaskDetail() {
   });
 
   apiPost(state.webAppUrl, payload, function(response) {
-    btn.disabled = false;
-    btn.textContent = 'Save';
     if (response && response.ok && response.data && response.data.success) {
-      msgEl.textContent = 'Task saved.';
+      msgEl.textContent = 'Saved.';
       msgEl.className = 'settings-message success';
       msgEl.style.display = 'block';
       state._taskDirty = false;
-      btn.style.display = 'none';
       // Update cached tasks
       if (state.cachedTasks) {
         state.cachedTasks = state.cachedTasks.map(function(t) {
@@ -1596,6 +1639,7 @@ function backToTaskList() {
   document.getElementById('task-detail').style.display = 'none';
   document.getElementById('task-list').style.display = '';
   document.getElementById('view-tabs').style.display = '';
+  document.querySelector('#view-tasks .task-filter').style.display = '';
   state._editingTask = null;
   state._taskDirty = false;
   // Re-render from cache to reflect any saved changes
@@ -1610,9 +1654,10 @@ var BUG_FIELDS = [
   { key: 'steps_to_reproduce', label: 'Steps to Reproduce' },
   { key: 'expected', label: 'Expected' },
   { key: 'actual', label: 'Actual' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'status', label: 'Status', type: 'select', options: ['To Do', 'Ready', 'Working', 'Review', 'Done'] },
   { key: 'environment', label: 'Environment' },
   { key: 'reporter', label: 'Reporter' },
-  { key: 'notes', label: 'Notes' },
   { key: 'additional_notes', label: 'Additional Notes' },
 ];
 
@@ -1667,12 +1712,18 @@ function renderBugList(bugs) {
     id.className = 'bug-id';
     id.textContent = bug.id;
 
-    var summary = document.createElement('span');
-    summary.className = 'bug-summary';
-    summary.textContent = bug.steps_to_reproduce ? bug.steps_to_reproduce.split('\n')[0] : '(no description)';
+    var name = document.createElement('span');
+    name.className = 'bug-summary';
+    name.textContent = bug.name || bug.steps_to_reproduce ? (bug.name || bug.steps_to_reproduce.split('\n')[0]) : '(no description)';
+
+    var status = document.createElement('span');
+    var statusKey = (bug.status || '').toLowerCase().replace(/\s+/g, '');
+    status.className = 'task-status task-status-' + statusKey;
+    status.textContent = bug.status || '';
 
     div.appendChild(id);
-    div.appendChild(summary);
+    div.appendChild(name);
+    div.appendChild(status);
 
     div.addEventListener('click', (function(b) {
       return function() { openBugDetail(b); };
@@ -1716,6 +1767,13 @@ function openBugDetail(bug) {
   idDiv.textContent = bug.id;
   content.appendChild(idDiv);
 
+  if (bug.name) {
+    var nameDiv = document.createElement('div');
+    nameDiv.style.cssText = 'padding:0 12px 8px;font-size:14px;color:#202124;';
+    nameDiv.textContent = bug.name;
+    content.appendChild(nameDiv);
+  }
+
   BUG_FIELDS.forEach(function(field) {
     var fieldDiv = document.createElement('div');
     fieldDiv.className = 'task-detail-field';
@@ -1724,6 +1782,27 @@ function openBugDetail(bug) {
     label.className = 'task-detail-label';
     label.textContent = field.label;
     fieldDiv.appendChild(label);
+
+    if (field.type === 'select') {
+      var select = document.createElement('select');
+      select.className = 'task-detail-textarea';
+      select.style.resize = 'none';
+      field.options.forEach(function(opt) {
+        var option = document.createElement('option');
+        option.value = opt;
+        option.textContent = opt;
+        if (opt === (bug[field.key] || '')) option.selected = true;
+        select.appendChild(option);
+      });
+      select.addEventListener('change', function() {
+        state._editingBug[field.key] = select.value;
+        state._bugDirty = true;
+        saveBugDetail();
+      });
+      fieldDiv.appendChild(select);
+      content.appendChild(fieldDiv);
+      return;
+    }
 
     var value = document.createElement('div');
     value.className = 'task-detail-value';
@@ -1742,17 +1821,17 @@ function openBugDetail(bug) {
 
         var btnRow = document.createElement('div');
         btnRow.className = 'task-detail-edit-actions';
-        var doneBtn = document.createElement('button');
-        doneBtn.className = 'op-edit-done';
-        doneBtn.textContent = 'Done';
-        doneBtn.addEventListener('click', function() {
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'op-edit-done';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', function() {
           state._editingBug[f.key] = textarea.value;
           valEl.textContent = textarea.value;
           valEl.style.display = '';
           textarea.remove();
           btnRow.remove();
           state._bugDirty = true;
-          document.getElementById('btn-bug-save').style.display = '';
+          saveBugDetail();
         });
         var cancelBtn = document.createElement('button');
         cancelBtn.className = 'op-edit-cancel';
@@ -1762,7 +1841,7 @@ function openBugDetail(bug) {
           textarea.remove();
           btnRow.remove();
         });
-        btnRow.appendChild(doneBtn);
+        btnRow.appendChild(saveBtn);
         btnRow.appendChild(cancelBtn);
         fieldContainer.appendChild(btnRow);
         textarea.focus();
@@ -1797,16 +1876,7 @@ function createNewBug() {
 
 function saveBugDetail() {
   if (!state._editingBug || !state._bugDirty) return;
-  if (document.querySelector('#bug-detail-content .task-detail-textarea')) {
-    var msgEl = document.getElementById('bug-detail-message');
-    msgEl.textContent = 'Finish editing all fields before saving.';
-    msgEl.className = 'settings-message error';
-    msgEl.style.display = 'block';
-    return;
-  }
   var btn = document.getElementById('btn-bug-save');
-  btn.disabled = true;
-  btn.textContent = 'Saving...';
   var msgEl = document.getElementById('bug-detail-message');
   msgEl.style.display = 'none';
 
@@ -1819,13 +1889,25 @@ function saveBugDetail() {
       btn.textContent = 'Save';
       if (response && response.ok && response.data && response.data.success) {
         state._editingBug.id = response.data.bugId;
+        if (response.data.name) state._editingBug.name = response.data.name;
         state._bugIsNew = false;
         state._bugDirty = false;
         btn.style.display = 'none';
         document.getElementById('btn-bug-delete').style.display = '';
-        // Update header
+        // Update header and name field
         var idDiv = document.querySelector('#bug-detail-content .task-detail-id');
         if (idDiv) idDiv.textContent = response.data.bugId;
+        if (response.data.name) {
+          // Add name below ID if not already there
+          var idEl = document.querySelector('#bug-detail-content .task-detail-id');
+          if (idEl && !idEl.nextElementSibling.classList.contains('bug-name-display')) {
+            var nameDiv = document.createElement('div');
+            nameDiv.className = 'bug-name-display';
+            nameDiv.style.cssText = 'padding:0 12px 8px;font-size:14px;color:#202124;';
+            nameDiv.textContent = response.data.name;
+            idEl.after(nameDiv);
+          }
+        }
         msgEl.textContent = 'Bug created: ' + response.data.bugId;
         msgEl.className = 'settings-message success';
         msgEl.style.display = 'block';
@@ -1969,6 +2051,7 @@ function _loadDocList(driveId) {
   apiGet(state.webAppUrl + '?action=list_feature_docs&driveId=' + encodeURIComponent(driveId), function(response) {
     document.getElementById('docs-loading').style.display = 'none';
     if (state.activeView !== 'docs') return;
+    if (document.getElementById('doc-detail').style.display !== 'none') return;
     if (!response || !response.ok || !response.data) {
       if (state._featureDocs) return; // keep cached on error
       return;
@@ -2008,6 +2091,28 @@ function _renderDocList(docs) {
 
     div.appendChild(id);
     div.appendChild(name);
+
+    var deleteBtn = document.createElement('button');
+    deleteBtn.className = 'patch-index-delete';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', (function(d, itemEl) {
+      return function(e) {
+        e.stopPropagation();
+        if (!confirm('Delete feature document "' + d.fileName + '"?')) return;
+        deleteBtn.disabled = true;
+        deleteBtn.textContent = 'Deleting...';
+        apiPost(state.webAppUrl, { action: 'delete_feature_doc', fileId: d.fileId, fileName: d.fileName }, function(response) {
+          if (response && response.ok && response.data && response.data.success) {
+            itemEl.remove();
+            state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== d.fileId; });
+          } else {
+            deleteBtn.disabled = false;
+            deleteBtn.textContent = 'Delete';
+          }
+        });
+      };
+    })(doc, div));
+    div.appendChild(deleteBtn);
 
     div.addEventListener('click', (function(d) {
       return function() { openDocDetail(d); };
@@ -2061,9 +2166,8 @@ function showNewDocForm() {
     }, function(response) {
       if (response && response.ok && response.data && response.data.success) {
         form.remove();
+        state._featureDocs = null; // invalidate cache so list refreshes on back
         openDocDetail(response.data.doc);
-        // Refresh the list
-        if (state._selectedDriveId) _loadDocList(state._selectedDriveId);
       } else {
         createBtn.disabled = false;
         createBtn.textContent = 'Create';

@@ -5,7 +5,7 @@
 const MAIN_TAB = 'Tasks';
 const BUGS_TAB = 'Bugs';
 const TASKS_HEADERS = ['id', 'name', 'description', 'acceptance_criteria', 'notes', 'status', 'date_updated', 'additional_notes'];
-const BUGS_HEADERS = ['id', 'steps_to_reproduce', 'expected', 'actual', 'environment', 'reporter', 'date_created', 'date_updated', 'notes', 'additional_notes'];
+const BUGS_HEADERS = ['id', 'name', 'steps_to_reproduce', 'expected', 'actual', 'notes', 'status', 'environment', 'reporter', 'date_created', 'date_updated', 'additional_notes'];
 
 const PROTECTED_STATUSES = new Set(['Doing', 'Review', 'Signed Off']);
 
@@ -176,15 +176,17 @@ function getAllBugs() {
     if (!row[0]) return;
     bugs.push({
       id: String(row[0]),
-      steps_to_reproduce: String(row[1]),
-      expected: String(row[2]),
-      actual: String(row[3]),
-      environment: String(row[4]),
-      reporter: String(row[5]),
-      dateCreated: row[6] instanceof Date ? row[6].toISOString() : String(row[6]),
-      dateUpdated: row[7] instanceof Date ? row[7].toISOString() : String(row[7]),
-      notes: String(row[8]),
-      additional_notes: String(row[9]),
+      name: String(row[1]),
+      steps_to_reproduce: String(row[2]),
+      expected: String(row[3]),
+      actual: String(row[4]),
+      notes: String(row[5]),
+      status: String(row[6]),
+      environment: String(row[7]),
+      reporter: String(row[8]),
+      dateCreated: row[9] instanceof Date ? row[9].toISOString() : String(row[9]),
+      dateUpdated: row[10] instanceof Date ? row[10].toISOString() : String(row[10]),
+      additional_notes: String(row[11]),
     });
   });
 
@@ -224,14 +226,16 @@ function addBug(bug) {
   var id = bug.id || _nextBugId();
   sheet.appendRow([
     id,
+    bug.name || '',
     bug.steps_to_reproduce || '',
     bug.expected || '',
     bug.actual || '',
+    bug.notes || '',
+    bug.status || 'To Do',
     bug.environment || '',
     bug.reporter || '',
     now,
     now,
-    bug.notes || '',
     bug.additional_notes || '',
   ]);
   return id;
@@ -246,14 +250,16 @@ function updateBug(bugId, updates) {
   for (var i = 0; i < data.length; i++) {
     if (String(data[i][0]) === bugId) {
       var rowNum = i + 2;
-      if (updates.steps_to_reproduce !== undefined) sheet.getRange(rowNum, 2).setValue(updates.steps_to_reproduce);
-      if (updates.expected !== undefined) sheet.getRange(rowNum, 3).setValue(updates.expected);
-      if (updates.actual !== undefined) sheet.getRange(rowNum, 4).setValue(updates.actual);
-      if (updates.environment !== undefined) sheet.getRange(rowNum, 5).setValue(updates.environment);
-      if (updates.reporter !== undefined) sheet.getRange(rowNum, 6).setValue(updates.reporter);
-      if (updates.notes !== undefined) sheet.getRange(rowNum, 9).setValue(updates.notes);
-      if (updates.additional_notes !== undefined) sheet.getRange(rowNum, 10).setValue(updates.additional_notes);
-      sheet.getRange(rowNum, 8).setValue(new Date().toISOString());
+      if (updates.name !== undefined) sheet.getRange(rowNum, 2).setValue(updates.name);
+      if (updates.steps_to_reproduce !== undefined) sheet.getRange(rowNum, 3).setValue(updates.steps_to_reproduce);
+      if (updates.expected !== undefined) sheet.getRange(rowNum, 4).setValue(updates.expected);
+      if (updates.actual !== undefined) sheet.getRange(rowNum, 5).setValue(updates.actual);
+      if (updates.notes !== undefined) sheet.getRange(rowNum, 6).setValue(updates.notes);
+      if (updates.status !== undefined) sheet.getRange(rowNum, 7).setValue(updates.status);
+      if (updates.environment !== undefined) sheet.getRange(rowNum, 8).setValue(updates.environment);
+      if (updates.reporter !== undefined) sheet.getRange(rowNum, 9).setValue(updates.reporter);
+      if (updates.additional_notes !== undefined) sheet.getRange(rowNum, 12).setValue(updates.additional_notes);
+      sheet.getRange(rowNum, 11).setValue(new Date().toISOString());
       return true;
     }
   }

@@ -8,7 +8,7 @@ var CONFIG_DEFAULTS = {
   FORMULATION_FOLDER_NAME: 'formulation',
   TECHNICAL_NOTES_FOLDER_NAME: 'technical_notes',
   PATCHES_FOLDER_NAME: 'patches',
-  DEBOUNCE_MINUTES: '10',
+  DEBOUNCE_MINUTES: '25',
 };
 
 // Keys that must be set before the app is considered configured

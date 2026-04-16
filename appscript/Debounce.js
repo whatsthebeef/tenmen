@@ -50,6 +50,7 @@ function getStableFiles(debounceMinutes) {
       const actualModified = getDocLastModifiedTime(entry.fileId);
       if (actualModified > lastSeen) {
         // File was modified since we last saw it — reset timer
+        logActivity('Debounce reset for ' + entry.fileName + ': modified at ' + actualModified.toISOString() + ' > lastSeen ' + entry.lastSeen);
         entry.lastSeen = actualModified.toISOString();
         setProp(key, JSON.stringify(entry));
         continue;
@@ -57,6 +58,7 @@ function getStableFiles(debounceMinutes) {
     } catch (e) {
       // File may have been deleted — clean up
       Logger.log('Debounce: could not check file ' + entry.fileId + ': ' + e.message);
+      logActivity('Debounce removed ' + entry.fileName + ': ' + e.message);
       deleteProp(key);
       continue;
     }

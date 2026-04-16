@@ -203,25 +203,28 @@ function pollCycle() {
 
 function _detectAndDebounce(driveId, lastRun) {
   var formDocs = getChangedFormulationDocs(driveId, lastRun);
-  if (formDocs.length) {
-    logActivity('Formulation changes: ' + formDocs.map(function(d) { return d.fileName; }).join(', '));
+  var newFormDocs = formDocs.filter(function(t) { return !isFileDebouncing(t.fileId); });
+  if (newFormDocs.length) {
+    logActivity('Formulation changes: ' + newFormDocs.map(function(d) { return d.fileName; }).join(', '));
   } else {
     logActivity('No formulation changes');
   }
   formDocs.forEach(function(t) {
-    logActivity('Debouncing formulation doc: ' + t.fileName + ' (waiting ' + getDebounceMinutes() + ' min)');
-    recordFileChange(t.fileId, 'formulation', t.fileName);
+    if (!isFileDebouncing(t.fileId)) {
+      logActivity('Debouncing formulation doc: ' + t.fileName + ' (waiting ' + getDebounceMinutes() + ' min)');
+      recordFileChange(t.fileId, 'formulation', t.fileName);
+    }
   });
 
   var featureDocs = getChangedUserStoryDocs(driveId, lastRun);
-  if (featureDocs.length) {
-    logActivity('Feature doc changes: ' + featureDocs.map(function(d) { return d.fileName; }).join(', '));
+  var newFeatureDocs = featureDocs.filter(function(d) { return d.fileName.match(FEATURE_DOC_PATTERN) && !isFileDebouncing(d.fileId); });
+  if (newFeatureDocs.length) {
+    logActivity('Feature doc changes: ' + newFeatureDocs.map(function(d) { return d.fileName; }).join(', '));
   } else {
     logActivity('No feature doc changes');
   }
   featureDocs.forEach(function(d) {
-    // Only track docs matching the F<number> naming pattern
-    if (d.fileName.match(FEATURE_DOC_PATTERN)) {
+    if (d.fileName.match(FEATURE_DOC_PATTERN) && !isFileDebouncing(d.fileId)) {
       recordFileChange(d.fileId, 'feature_doc', d.fileName);
     }
   });

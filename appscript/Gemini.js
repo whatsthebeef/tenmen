@@ -44,8 +44,23 @@ function parseGeminiJson(raw) {
     if (match) {
       return JSON.parse(match[1]);
     }
-    throw new Error('Failed to parse Gemini response as JSON: ' + raw.substring(0, 200));
+    throw new Error('Failed to parse Gemini response as JSON: ' + raw.substring(0, 500));
   }
+}
+
+/**
+ * Generate a short bug name from the steps and actual result.
+ */
+function callGeminiForBugName(stepsToReproduce, actual) {
+  var prompt = 'Generate a short bug title (under 10 words) that summarizes this bug.\n\n' +
+    'Steps to reproduce:\n' + (stepsToReproduce || '(none)') + '\n\n' +
+    'Actual result:\n' + (actual || '(none)') + '\n\n' +
+    'Return JSON: {"name": "short bug title"}\n' +
+    'Return ONLY valid JSON, no other text.';
+
+  var raw = callGemini(prompt, 256);
+  var result = parseGeminiJson(raw);
+  return result.name || '';
 }
 
 /**
@@ -71,7 +86,7 @@ function callGeminiForTaskProposal(userStoryContent, currentTasks, featureId, te
  */
 function callGeminiForFeatureIdentification(summaryContent, knownFeatures) {
   var prompt = getFeatureIdentificationPrompt(summaryContent, knownFeatures);
-  var raw = callGemini(prompt, 1024);
+  var raw = callGemini(prompt, 4096);
   return parseGeminiJson(raw);
 }
 
