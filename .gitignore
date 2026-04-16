@@ -2,3 +2,7 @@
 appscript/.deploy-config
 appscript/.clasp.json
 node_modules
+
+### claude ###
+.claude/*
+!.claude/commands/

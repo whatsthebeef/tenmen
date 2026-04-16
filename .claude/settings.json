@@ -42,7 +42,7 @@
       "Bash(npm test:*)",
       "Bash(npx tsc:*)",
       "Bash(npx ng build:*)",
-      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/shared-drawing-section.store.spec.ts' 2>&1 | grep -E \"FAILED|✗|✘|Error|Expected\")",
+      "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/shared-drawing-section.store.spec.ts' 2>&1 | grep -E \"FAILED|\u2717|\u2718|Error|Expected\")",
       "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/shared-drawing-section.store.spec.ts' 2>&1 | grep -E \"FAILED|SUCCESS|TOTAL\")",
       "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/fabric.component.spec.ts' 2>&1 | grep -E \"FAILED|Expected|keyboard\" | head -30)",
       "Bash(NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include='**/fabric.component.spec.ts' 2>&1 | grep -E \"FAILED|SUCCESS|TOTAL\" | tail -5)",
@@ -54,7 +54,7 @@
       "WebFetch(domain:fabric5.fabricjs.com)",
       "WebFetch(domain:fabricjs.com)",
       "WebFetch(domain:github.com)",
-      "Bash(cd /Users/john/dev/pocketlab-notebook/services/app && NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include 'src/app/stores/entry-store-automaton/modification-strategy.spec.ts' --include 'src/app/stores/entry-store-automaton/operation-state-machine.spec.ts' 2>&1 | grep -E '\\(TOTAL|FAILED|SUCCESS|Executed|SUMMARY|Chrome|Error|✗|✓|SPEC|Spec|spec|describe|it\\\\s|PASSED|passed|failed|Ran|Tests|tests|modification|operation|ModificationStrategy|OperationStateMachine|^[[:space:]]*[✓✗]|^\\\\s+[0-9]+ spec|HeadlessChrome|Finished|Complete\\)')",
+      "Bash(cd /Users/john/dev/pocketlab-notebook/services/app && NODE_OPTIONS=\"--max_old_space_size=14000 --openssl-legacy-provider\" npx ng test --karma-config 'karma.conf.codebuild.js' --include 'src/app/stores/entry-store-automaton/modification-strategy.spec.ts' --include 'src/app/stores/entry-store-automaton/operation-state-machine.spec.ts' 2>&1 | grep -E '\\(TOTAL|FAILED|SUCCESS|Executed|SUMMARY|Chrome|Error|\u2717|\u2713|SPEC|Spec|spec|describe|it\\\\s|PASSED|passed|failed|Ran|Tests|tests|modification|operation|ModificationStrategy|OperationStateMachine|^[[:space:]]*[\u2713\u2717]|^\\\\s+[0-9]+ spec|HeadlessChrome|Finished|Complete\\)')",
       "Bash(npx ng test --watch=false 2>&1 > /tmp/app-test-output.txt; echo \"exit: $?\")",
       "Bash(npx karma start karma.conf.js --single-run 2>&1 | grep -E \"\\(FAILED|TOTAL|Executed|ERROR|TypeError|Cannot read\\)\" | head -30)",
       "Bash(cd /Users/john/dev/pocketlab-notebook && npx nx test app --testPathPattern=\"create-individual-sc-from-version|create-lg-from-version|create-lgs-from-version|loader.directive\" --no-cache 2>&1 | tail -80)",
@@ -97,5 +97,9 @@
       "net:sheets.googleapis.com",
       "net:docs.google.com"
     ]
-  }
+  },
+  "env": {
+    "TASK_APP_URL": "https://script.google.com/a/macros/thepocketlab.com/s/AKfycbwZ7ALbY6HjaL4qhsxuI8ULZU38r7R6UO2oanR--HHdHnguNd9AT6FZEaad5BiePVrdEg/exec"
+  },
+  "mcpServers": {}
 }
