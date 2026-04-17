@@ -176,7 +176,8 @@ function doPost(e) {
         applyStoryUpdate(payload.docId, payload.storyId, payload.proposedText, null, true);
         return _jsonResponse({ success: true });
       } catch (e) {
-        return _jsonResponse({ success: false, error: e.message });
+        logActivity('update_story error: ' + (e.message || String(e)));
+        return _jsonResponse({ success: false, error: e.message || String(e) || 'Unknown error in update_story' });
       }
     } else if (action === 'create_story') {
       if (!payload.docId || !payload.proposedText) return _jsonResponse({ error: 'docId and proposedText required' }, 400);
@@ -184,7 +185,8 @@ function doPost(e) {
         applyStoryCreate(payload.docId, payload.proposedText, payload.storyId, true);
         return _jsonResponse({ success: true });
       } catch (e) {
-        return _jsonResponse({ success: false, error: e.message });
+        logActivity('create_story error: ' + (e.message || String(e)));
+        return _jsonResponse({ success: false, error: e.message || String(e) || 'Unknown error in create_story' });
       }
     } else if (action === 'delete_story') {
       if (!payload.docId || !payload.storyId) return _jsonResponse({ error: 'docId and storyId required' }, 400);
@@ -301,8 +303,15 @@ function doPost(e) {
         return _jsonResponse({ success: false, error: summaryErr.message, debug: { steps: ['ERROR: ' + summaryErr.message] } });
       }
     } else if (action === 'process_feature_doc') {
-      processLastFeatureDocEdit();
-      return _jsonResponse({ success: true });
+      try {
+        logActivity('Processing last feature document change...');
+        processLastFeatureDocEdit();
+        logActivity('Feature document processing complete');
+        return _jsonResponse({ success: true, message: 'Feature document processed' });
+      } catch (feErr) {
+        logActivity('Feature doc processing error: ' + feErr.message);
+        return _jsonResponse({ success: false, error: feErr.message });
+      }
     } else {
       return _jsonResponse({ error: 'Unknown action: ' + action }, 400);
     }

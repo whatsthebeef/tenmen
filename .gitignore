@@ -6,3 +6,6 @@ node_modules
 ### claude ###
 .claude/*
 !.claude/commands/
+
+### sstor ###
+.sstor/.port

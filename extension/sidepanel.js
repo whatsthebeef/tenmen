@@ -178,10 +178,30 @@ document.addEventListener('DOMContentLoaded', function() {
     var btn = this;
     btn.disabled = true;
     btn.textContent = 'Processing...';
+    var debugEl = document.getElementById('debug-output');
+    debugEl.style.display = 'none';
 
     apiPost(state.webAppUrl, { action: 'process_feature_doc' }, function(response) {
       btn.disabled = false;
       btn.textContent = 'Process Last Feature Document Change';
+
+      if (!response) {
+        _showDebugCard(debugEl, 'Error', ['No response from server']);
+        return;
+      }
+      if (!response.ok) {
+        var errSteps = ['Connection error: ' + (response.error || 'unknown')];
+        if (response.raw) errSteps.push(response.raw);
+        _showDebugCard(debugEl, 'Error', errSteps);
+        return;
+      }
+      var data = response.data || {};
+      if (data.error) {
+        _showDebugCard(debugEl, 'Error', [data.error]);
+      } else {
+        _showDebugCard(debugEl, 'Complete', [data.message || 'Feature document processed']);
+        setTimeout(function() { fetchAllPatches(); }, 1000);
+      }
     });
   });
 
