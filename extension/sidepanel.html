@@ -5,16 +5,9 @@
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <div class="config-bar" id="config-bar">
-    <label>Tenmen Web App URL</label>
-    <input type="text" id="web-app-url" placeholder="https://script.google.com/macros/s/.../exec">
-    <button id="save-config">Save</button>
-  </div>
-
-  <nav class="view-tabs" id="view-tabs" style="display:none;">
+  <nav class="view-tabs" id="view-tabs">
     <button class="view-tab active" data-view="patches">Patches</button>
     <button class="view-tab" data-view="tasks">Tasks</button>
-    <button class="view-tab" data-view="bugs">Bugs</button>
     <button class="view-tab" data-view="docs">Docs</button>
     <button class="view-tab view-tab-icon" data-view="settings" title="Settings">&#9881;</button>
   </nav>
@@ -26,6 +19,11 @@
     <div class="patch-back" id="patch-back" style="display:none;">
       <button class="patch-back-btn" id="btn-patch-back">&larr; Back to patches</button>
       <button class="patch-index-delete" id="btn-patch-delete" style="float:right;">Delete Patch</button>
+    </div>
+    <div class="patch-actions" id="patch-actions">
+      <button class="action-btn" id="btn-process-summary">Process Meeting Summary</button>
+      <button class="action-btn" id="btn-process-feature">Process Feature Document</button>
+      <div class="debug-output" id="debug-output" style="display:none;"></div>
     </div>
     <div class="section-header" id="source-section" style="display:none;">
       <div class="section-label">Meeting Summary</div>
@@ -62,32 +60,6 @@
     </div>
   </div>
 
-  <!-- Bugs view -->
-  <div class="view" id="view-bugs" style="display:none;">
-    <div class="task-filter">
-      <input type="text" id="bug-filter-input" placeholder="Filter by ID...">
-      <button class="task-filter-clear" id="bug-filter-clear">&times;</button>
-    </div>
-    <div class="loading" id="bugs-loading" style="display:none;">Loading Bugs...</div>
-    <div id="bug-list"></div>
-    <div class="all-done" id="bugs-empty" style="display:none;">No bugs found</div>
-    <div id="bug-actions" style="padding:12px;">
-      <button class="action-btn" id="btn-new-bug">New Bug</button>
-    </div>
-    <!-- Bug detail view -->
-    <div id="bug-detail" style="display:none;">
-      <div class="patch-back" id="bug-back">
-        <button class="patch-back-btn" id="btn-bug-back">&larr; Back to bugs</button>
-      </div>
-      <div id="bug-detail-content"></div>
-      <div class="task-detail-actions">
-        <button class="action-btn" id="btn-bug-save" style="display:none;">Save</button>
-        <button class="action-btn settings-cancel" id="btn-bug-delete" style="display:none;">Delete</button>
-      </div>
-      <div class="settings-message" id="bug-detail-message" style="display:none;"></div>
-    </div>
-  </div>
-
   <!-- Docs view -->
   <div class="view" id="view-docs" style="display:none;">
     <div id="docs-drive-selector" style="display:none;padding:10px 12px;background:#fff;border-bottom:1px solid #e0e0e0;">
@@ -115,12 +87,6 @@
 
   <!-- Settings view -->
   <div class="view" id="view-settings" style="display:none;">
-    <div class="actions-panel" id="actions-panel">
-      <button class="action-btn" id="btn-reload">Fetch Patches</button>
-      <button class="action-btn" id="btn-process-summary">Process Last Meeting Summary</button>
-      <button class="action-btn" id="btn-process-feature">Process Last Feature Document Change</button>
-      <div class="debug-output" id="debug-output" style="display:none;"></div>
-    </div>
 
     <div class="settings-panel" id="settings-panel">
       <div class="section-label">Settings</div>
@@ -132,9 +98,18 @@
         <label>Gemini Model</label>
         <input type="text" id="setting-gemini-model" placeholder="gemini-3-pro-preview">
       </div>
+      <div class="section-label" style="margin-top:14px;">Jira</div>
       <div class="settings-field">
-        <label>API Key (for external access)</label>
-        <input type="text" id="setting-api-key" placeholder="Optional — protects task endpoints">
+        <label>Jira Email</label>
+        <input type="text" id="setting-jira-email" placeholder="you@company.com">
+      </div>
+      <div class="settings-field">
+        <label>Jira API Token</label>
+        <input type="password" id="setting-jira-token" placeholder="ATATT3x...">
+      </div>
+      <div class="settings-field">
+        <label>Jira Project Key</label>
+        <input type="text" id="setting-jira-project" placeholder="TEN">
       </div>
       <div class="section-label" style="margin-top:14px;">Projects</div>
       <div id="settings-projects"></div>
@@ -155,12 +130,22 @@
       <div class="settings-message" id="settings-message" style="display:none;"></div>
     </div>
 
-    <div class="activity-log-section">
-      <div class="section-label" style="margin-top:14px;">Activity Log</div>
-      <div id="activity-log" class="activity-log"></div>
-    </div>
   </div>
 
+  <!-- File browser overlay -->
+  <div id="file-browser-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:#fff;overflow-y:auto;">
+    <div style="padding:10px 12px;background:#fff;border-bottom:1px solid #e0e0e0;position:sticky;top:0;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button id="btn-file-browser-cancel" style="background:none;border:none;color:#1a73e8;cursor:pointer;font-size:13px;padding:4px 0;">&larr;</button>
+        <input type="text" id="file-browser-search" placeholder="Search Google Drive..." style="flex:1;padding:8px 10px;border:1px solid #dadce0;border-radius:6px;font-size:13px;">
+      </div>
+      <div id="file-browser-status" style="font-size:11px;color:#5f6368;margin-top:6px;"></div>
+    </div>
+    <div id="file-browser-results"></div>
+  </div>
+
+  <script src="google-api.js"></script>
+  <script src="firestore-client.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

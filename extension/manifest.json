@@ -8,12 +8,26 @@
     "activeTab",
     "storage",
     "tabs",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://docs.google.com/*",
-    "https://script.google.com/*"
+    "https://docs.googleapis.com/*",
+    "https://firestore.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://script.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://*.atlassian.net/*"
   ],
+  "oauth2": {
+    "client_id": "102866742480-sei236di697mjriujr8en7dfqat22o11.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/datastore"
+    ]
+  },
   "action": {
     "default_title": "Tenmen Patch Review"
   },

@@ -672,39 +672,6 @@ span.diff-add {
   border-radius: 4px;
 }
 
-/* Activity log */
-.activity-log-section {
-  padding: 12px;
-  background: #fff;
-  border-top: 1px solid #e0e0e0;
-}
-.activity-log {
-  max-height: 300px;
-  overflow-y: auto;
-  font-size: 12px;
-  font-family: monospace;
-  color: #5f6368;
-  padding: 8px 12px;
-  background: #f8f9fa;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  margin-top: 8px;
-}
-.activity-log-entry {
-  padding: 4px 0;
-  border-bottom: 1px solid #ecedef;
-  line-height: 1.5;
-}
-.activity-log-entry:last-child {
-  border-bottom: none;
-}
-.activity-log-time {
-  color: #80868b;
-  margin-right: 6px;
-}
-.activity-log-entry.error {
-  color: #c5221f;
-}
 
 /* Docs list */
 .doc-item {
@@ -802,34 +769,6 @@ span.diff-add {
   margin: 8px 12px;
 }
 
-/* Bug list */
-.bug-item {
-  padding: 10px 12px;
-  border-bottom: 1px solid #f1f3f4;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.bug-item:hover {
-  background: #f8f9fa;
-}
-.bug-id {
-  font-family: monospace;
-  font-size: 12px;
-  font-weight: 600;
-  color: #c5221f;
-  flex-shrink: 0;
-}
-.bug-summary {
-  font-size: 13px;
-  color: #202124;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
 /* Task filter */
 .task-filter {
   padding: 8px 12px;
@@ -923,6 +862,33 @@ span.diff-add {
 }
 .task-detail-status {
   padding: 4px 12px 12px;
+}
+
+/* File browser */
+.file-browser-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f3f4;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.file-browser-item:hover {
+  background: #e8f0fe;
+}
+.file-browser-name {
+  font-size: 13px;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.file-browser-date {
+  font-size: 11px;
+  color: #80868b;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 /* Loading */

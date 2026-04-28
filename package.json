@@ -12,5 +12,9 @@
   "type": "commonjs",
   "devDependencies": {
     "@google/clasp": "^3.3.0"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^8.5.0",
+    "@google-cloud/storage": "^7.19.0"
   }
 }

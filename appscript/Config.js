@@ -5,10 +5,8 @@
 // Defaults for values that don't need user input
 var CONFIG_DEFAULTS = {
   GEMINI_MODEL: 'gemini-3-pro-preview',
-  FORMULATION_FOLDER_NAME: 'formulation',
   TECHNICAL_NOTES_FOLDER_NAME: 'technical_notes',
   PATCHES_FOLDER_NAME: 'patches',
-  DEBOUNCE_MINUTES: '25',
 };
 
 // Keys that must be set before the app is considered configured
@@ -143,10 +141,6 @@ function getGeminiModel() {
   return getConfigValue('GEMINI_MODEL');
 }
 
-function getDebounceMinutes() {
-  return parseInt(getConfigValue('DEBOUNCE_MINUTES'), 10) || 10;
-}
-
 function getFolderName(key) {
   return getConfigValue(key);
 }
@@ -181,33 +175,3 @@ function getWebAppUrl() {
 }
 
 // ============================================================
-// Timestamps
-// ============================================================
-
-function getLastRunTime() {
-  var val = getProp('LAST_RUN_TIME');
-  return val ? new Date(val) : null;
-}
-
-function setLastRunTime(date) {
-  setProp('LAST_RUN_TIME', date.toISOString());
-}
-
-// ============================================================
-// Activity log — recent events stored in a script property
-// ============================================================
-
-var MAX_ACTIVITY_LOG = 50;
-
-function logActivity(message) {
-  var log = getActivityLog();
-  log.unshift({ time: new Date().toISOString(), message: message });
-  if (log.length > MAX_ACTIVITY_LOG) log = log.slice(0, MAX_ACTIVITY_LOG);
-  setProp('ACTIVITY_LOG', JSON.stringify(log));
-}
-
-function getActivityLog() {
-  var val = getProp('ACTIVITY_LOG');
-  if (!val) return [];
-  try { return JSON.parse(val); } catch (e) { return []; }
-}

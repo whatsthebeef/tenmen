@@ -1,0 +1,815 @@
+import {onRequest} from "firebase-functions/v2/https";
+import {setGlobalOptions} from "firebase-functions/v2";
+import * as firestore from "./firestore.js";
+import * as docs from "./docs.js";
+import * as gemini from "./gemini.js";
+
+setGlobalOptions({maxInstances: 10, region: "us-central1", timeoutSeconds: 540});
+
+// Feature doc pattern
+const FEATURE_DOC_PATTERN = /^F(\d+)\s+/i;
+
+// ============================================================
+// Main API endpoint
+// ============================================================
+
+export const api = onRequest({cors: true}, async (req, res) => {
+  try {
+    // GET requests
+    if (req.method === "GET") {
+      const action = req.query.action as string;
+
+      if (action === "list_tasks") {
+        const tasks = await firestore.getAllTasks();
+        res.json({tasks});
+        return;
+      }
+
+      if (action === "list_patches") {
+        const patches = await firestore.getAllPatches();
+        // Filter out fully resolved patches
+        const pending: Record<string, unknown>[] = [];
+        for (const p of patches) {
+          const ops = (p.data.operations as Array<Record<string, unknown>>) || [];
+          const pendingCount = ops.filter((op) => !op._applied && !op._dismissed).length;
+          if (pendingCount === 0 && ops.length > 0) {
+            await firestore.deletePatch(p.patchId);
+            continue;
+          }
+          pending.push({
+            patchId: p.patchId,
+            fileId: p.patchId,
+            fileName: p.patchId + ".json",
+            featureId: p.featureId,
+            patchType: p.patchType,
+            created: p.createdAt,
+            targetDocName: p.data.targetDocName || "",
+            targetDocUrl: p.data.targetDocUrl || "",
+            targetSpreadsheetUrl: p.data.targetSpreadsheetUrl || "",
+            sourceFileName: p.data.sourceFileName || "",
+            sourceFileUrl: p.data.sourceFileUrl || "",
+            operationCount: ops.length,
+            pendingCount,
+          });
+        }
+        res.json({patches: pending});
+        return;
+      }
+
+      if (action === "get_patch") {
+        const patchId = req.query.patchId as string;
+        if (!patchId) {
+          res.json({error: "Missing patchId"});
+          return;
+        }
+        const data = await firestore.getPatch(patchId);
+        if (!data) {
+          res.json({error: "Patch not found: " + patchId});
+          return;
+        }
+        res.json(data);
+        return;
+      }
+
+      if (action === "list_feature_docs") {
+        const config = await firestore.getConfig();
+        const driveId = (req.query.driveId as string) || getSharedDriveId(config);
+        if (!driveId) {
+          res.json({error: "No drive configured"});
+          return;
+        }
+        const featureDocs = await docs.discoverFeatureDocs(driveId);
+        res.json({docs: featureDocs});
+        return;
+      }
+
+      if (action === "get_feature_doc_stories") {
+        const docId = req.query.docId as string;
+        if (!docId) {
+          res.json({error: "Missing docId"});
+          return;
+        }
+        const stories = await getFeatureDocStories(docId);
+        res.json(stories);
+        return;
+      }
+
+      if (action === "get_story_text") {
+        const docId = req.query.docId as string;
+        const storyId = req.query.storyId as string;
+        if (!docId || !storyId) {
+          res.json({error: "Missing docId or storyId"});
+          return;
+        }
+        const section = await docs.findStorySection(docId, storyId);
+        if (!section) {
+          res.json({error: "Story " + storyId + " not found", text: ""});
+          return;
+        }
+        const text = await docs.readSectionText(docId, section);
+        res.json({text, storyId});
+        return;
+      }
+
+      if (action === "get_task_data") {
+        const config = await firestore.getConfig();
+        if (!checkApiKey(req.query.key as string, config)) {
+          res.status(401).json({error: "Unauthorized"});
+          return;
+        }
+        const taskId = req.query.taskId as string;
+        if (!taskId) {
+          res.json({error: "Missing taskId"});
+          return;
+        }
+        const task = await firestore.getTaskById(taskId);
+        if (!task) {
+          res.json({error: "Task not found: " + taskId, task: null});
+          return;
+        }
+        if (task.status === "Ready") {
+          await firestore.updateTask(taskId, {status: "Working"});
+          task.status = "Working";
+        }
+        res.json({task});
+        return;
+      }
+
+      if (action === "get_config") {
+        const config = await firestore.getConfig();
+        res.json({
+          GEMINI_API_KEY: config.GEMINI_API_KEY || "",
+          GEMINI_MODEL: config.GEMINI_MODEL || "",
+          API_KEY: config.API_KEY || "",
+          PROJECTS: config.PROJECTS || [],
+          projectConfigs: config.projectConfigs || {},
+          configured: !!(config.GEMINI_API_KEY && ((config.PROJECTS as string[]) || []).length),
+        });
+        return;
+      }
+
+      res.status(400).json({error: "Unknown action: " + action});
+      return;
+    }
+
+    // POST requests
+    if (req.method === "POST") {
+      const payload = req.body;
+      const action = payload.action;
+
+      if (action === "save_config") {
+        const updates: Record<string, unknown> = {};
+        if (payload.GEMINI_API_KEY) updates.GEMINI_API_KEY = payload.GEMINI_API_KEY;
+        if (payload.GEMINI_MODEL) updates.GEMINI_MODEL = payload.GEMINI_MODEL;
+        if (payload.API_KEY !== undefined) updates.API_KEY = payload.API_KEY;
+        if (payload.projectConfigs) updates.projectConfigs = payload.projectConfigs;
+        // Merge PROJECTS from projectConfigs keys
+        if (payload.projectConfigs) {
+          const config = await firestore.getConfig();
+          updates.PROJECTS = config.PROJECTS || Object.keys(payload.projectConfigs);
+        }
+        await firestore.saveConfig(updates);
+        res.json({success: true, message: "Settings saved."});
+        return;
+      }
+
+      if (action === "init_project") {
+        if (!payload.projectName) {
+          res.status(400).json({error: "projectName is required"});
+          return;
+        }
+        if (!payload.sharedDriveId) {
+          res.status(400).json({error: "sharedDriveId is required"});
+          return;
+        }
+        const config = await firestore.getConfig();
+        const projects = (config.PROJECTS as string[]) || [];
+        if (!projects.includes(payload.projectName)) {
+          projects.push(payload.projectName);
+        }
+        const projectConfigs = (config.projectConfigs as Record<string, Record<string, string>>) || {};
+        projectConfigs[payload.projectName] = {SHARED_DRIVE_ID: payload.sharedDriveId};
+        await firestore.saveConfig({PROJECTS: projects, projectConfigs});
+        res.json({success: true, project: payload.projectName, projects});
+        return;
+      }
+
+      if (action === "remove_project") {
+        if (!payload.projectName) {
+          res.status(400).json({error: "projectName is required"});
+          return;
+        }
+        const config = await firestore.getConfig();
+        const projects = ((config.PROJECTS as string[]) || []).filter((p: string) => p !== payload.projectName);
+        const projectConfigs = (config.projectConfigs as Record<string, Record<string, string>>) || {};
+        delete projectConfigs[payload.projectName];
+        await firestore.saveConfig({PROJECTS: projects, projectConfigs});
+        res.json({success: true, projects});
+        return;
+      }
+
+      if (action === "claim_next") {
+        const config = await firestore.getConfig();
+        if (!checkApiKey(payload.key, config)) {
+          res.status(401).json({error: "Unauthorized"});
+          return;
+        }
+        const tasks = await firestore.getAllTasks();
+        const readyTasks = tasks
+          .filter((t) => t.status === "Ready")
+          .sort((a, b) => (a.dateUpdated || "").localeCompare(b.dateUpdated || ""));
+        if (!readyTasks.length) {
+          res.status(404).json({error: "No Ready tasks found"});
+          return;
+        }
+        const task = readyTasks[0];
+        await firestore.updateTask(task.id, {status: "Working"});
+        task.status = "Working";
+        res.json(task);
+        return;
+      }
+
+      if (action === "finish_task") {
+        const config = await firestore.getConfig();
+        if (!checkApiKey(payload.key, config)) {
+          res.status(401).json({error: "Unauthorized"});
+          return;
+        }
+        if (!payload.taskId) {
+          res.status(400).json({error: "taskId is required"});
+          return;
+        }
+        const updated = await firestore.updateTask(payload.taskId, {status: "Finished"});
+        if (!updated) {
+          res.status(404).json({error: "Task not found: " + payload.taskId});
+          return;
+        }
+        res.json({taskId: payload.taskId, status: "Finished"});
+        return;
+      }
+
+      if (action === "update_task") {
+        if (!payload.taskId) {
+          res.status(400).json({error: "taskId is required"});
+          return;
+        }
+        const updates: Partial<firestore.Task> = {};
+        for (const key of ["name", "description", "acceptance_criteria", "notes", "status", "additional_notes"]) {
+          if (payload[key] !== undefined) (updates as Record<string, string>)[key] = payload[key];
+        }
+        const updated = await firestore.updateTask(payload.taskId, updates);
+        if (!updated) {
+          res.status(404).json({error: "Task not found: " + payload.taskId});
+          return;
+        }
+        res.json({success: true, taskId: payload.taskId});
+        return;
+      }
+
+      if (action === "delete_patch") {
+        if (!payload.patchId) {
+          res.status(400).json({error: "patchId is required"});
+          return;
+        }
+        await firestore.deletePatch(payload.patchId);
+        res.json({success: true, patchId: payload.patchId});
+        return;
+      }
+
+      if (action === "apply_operation") {
+        await handleApplyOperation(payload, res);
+        return;
+      }
+
+      if (action === "dismiss_operation") {
+        await handleDismissOperation(payload, res);
+        return;
+      }
+
+      if (action === "create_feature_doc") {
+        const config = await firestore.getConfig();
+        const driveId = payload.driveId || getSharedDriveId(config);
+        if (!driveId || !payload.featureId || !payload.featureName) {
+          res.status(400).json({error: "driveId, featureId, and featureName required"});
+          return;
+        }
+        const doc = await docs.createFeatureDoc(driveId, payload.featureId, payload.featureName);
+        res.json({success: true, doc});
+        return;
+      }
+
+      if (action === "delete_feature_doc") {
+        if (!payload.fileId) {
+          res.status(400).json({error: "fileId required"});
+          return;
+        }
+        const {google: goog} = await import("googleapis");
+        const drive = goog.drive({
+          version: "v3",
+          auth: new goog.auth.GoogleAuth({
+            scopes: ["https://www.googleapis.com/auth/drive"],
+          }),
+        });
+        await drive.files.update({
+          fileId: payload.fileId,
+          requestBody: {trashed: true},
+          supportsAllDrives: true,
+        });
+        res.json({success: true});
+        return;
+      }
+
+      if (action === "update_story") {
+        if (!payload.docId || !payload.storyId) {
+          res.status(400).json({error: "docId and storyId required"});
+          return;
+        }
+        try {
+          await docs.applyStoryUpdate(payload.docId, payload.storyId, payload.proposedText, undefined, true);
+          res.json({success: true});
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "create_story") {
+        if (!payload.docId || !payload.proposedText) {
+          res.status(400).json({error: "docId and proposedText required"});
+          return;
+        }
+        try {
+          await docs.applyStoryCreate(payload.docId, payload.proposedText, payload.storyId, true);
+          res.json({success: true});
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "delete_story") {
+        if (!payload.docId || !payload.storyId) {
+          res.status(400).json({error: "docId and storyId required"});
+          return;
+        }
+        try {
+          await docs.applyStoryDelete(payload.docId, payload.storyId, undefined, true);
+          res.json({success: true});
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "identify_features") {
+        if (!payload.fileId) {
+          res.status(400).json({error: "fileId is required"});
+          return;
+        }
+        try {
+          const config = await firestore.getConfig();
+          const driveId = getSharedDriveId(config);
+          if (!driveId) {
+            res.json({success: false, error: "No drive configured"});
+            return;
+          }
+          const content = await docs.readDocContent(payload.fileId);
+          const fileName = await docs.getDocTitle(payload.fileId);
+          if (!content.trim()) {
+            res.json({success: false, error: "Document is empty"});
+            return;
+          }
+          const knownFeatures = await getKnownFeatures(driveId);
+          if (!knownFeatures.length) {
+            res.json({success: false, error: "No feature docs found in drive root"});
+            return;
+          }
+          const result = await gemini.callGeminiForFeatureIdentification(content, knownFeatures);
+          res.json({
+            success: true,
+            data: {
+              fileId: payload.fileId,
+              fileName,
+              contentLength: content.length,
+              knownFeatures: knownFeatures.map((f) => f.id),
+              featureIds: result.featureIds || [],
+            },
+          });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "normalize_feature") {
+        try {
+          const config = await firestore.getConfig();
+          const driveId = getSharedDriveId(config);
+          if (!driveId) {
+            res.json({success: false, error: "No drive configured"});
+            return;
+          }
+          const featureDocs = await docs.discoverFeatureDocs(driveId);
+          const docInfo = featureDocs.find((d) => d.featureId === payload.featureId);
+          if (!docInfo) {
+            res.json({success: false, error: "No feature doc found for " + payload.featureId});
+            return;
+          }
+          const structure = await docs.extractDocStructure(docInfo.fileId);
+          const structuredText = docs.formatStructureForPrompt(structure);
+          const comments = await docs.extractDocComments(docInfo.fileId);
+          const normalizedDoc = await gemini.callGeminiForNormalization(structuredText, payload.featureId, comments);
+          res.json({
+            success: true,
+            data: {normalizedDoc, comments, docFileId: docInfo.fileId, docFileName: docInfo.fileName},
+          });
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "generate_patch_plan") {
+        try {
+          const config = await firestore.getConfig();
+          const driveId = getSharedDriveId(config);
+          if (!driveId) {
+            res.json({success: false, error: "No drive configured"});
+            return;
+          }
+          const content = await docs.readDocContent(payload.fileId);
+          const patchPlan = await gemini.callGeminiForPatchPlan(
+            payload.normalizedDoc, content, payload.featureId, payload.comments
+          );
+          const operations = patchPlan.operations || [];
+          if (!operations.length) {
+            res.json({success: true, step: payload.featureId + ": No patch operations generated"});
+            return;
+          }
+
+          // Populate currentText
+          for (const op of operations) {
+            if ((op.type === "update" || op.type === "delete") && op.storyId && !op.currentText) {
+              try {
+                const section = await docs.findStorySection(payload.docFileId, op.storyId as string);
+                if (section) {
+                  op.currentText = await docs.readSectionText(payload.docFileId, section);
+                }
+              } catch { /* non-fatal */ }
+            }
+          }
+
+          const storyAnchors = await docs.extractStoryAnchors(payload.docFileId).catch(() => ({}));
+
+          const patchData = {
+            featureId: payload.featureId,
+            targetDocId: payload.docFileId,
+            targetDocName: payload.docFileName || payload.featureId,
+            targetDocUrl: "https://docs.google.com/document/d/" + payload.docFileId + "/edit",
+            sourceFileName: payload.fileName,
+            sourceFileUrl: payload.fileId ? "https://docs.google.com/document/d/" + payload.fileId + "/edit" : "",
+            createdAt: new Date().toISOString(),
+            storyAnchors,
+            operations: operations.map((op) => ({...op, _applied: false, _dismissed: false})),
+            uncertainties: patchPlan.uncertainties || [],
+          };
+
+          const dateStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+          const patchId = payload.featureId + "-patch-" + dateStr + "-" + Date.now();
+          await firestore.savePatch(patchId, patchData);
+
+          const stepMsg = payload.featureId + ": Created patch " + patchId + " (" + operations.length + " operations)";
+          res.json({success: true, step: stepMsg});
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      if (action === "update_technical_notes") {
+        // Fire and forget — just return success
+        res.json({success: true});
+        // Do the work after responding
+        try {
+          const config = await firestore.getConfig();
+          const driveId = getSharedDriveId(config);
+          if (driveId) {
+            const content = await docs.readDocContent(payload.fileId);
+            // Technical notes update would go here — skipping for now as it requires DocumentApp
+          }
+        } catch { /* non-fatal */ }
+        return;
+      }
+
+      if (action === "process_feature_doc") {
+        if (!payload.fileId) {
+          res.status(400).json({error: "fileId is required"});
+          return;
+        }
+        try {
+          const result = await processFeatureDoc(payload.fileId);
+          if (result.error) {
+            res.json({success: false, error: result.error});
+          } else {
+            res.json({success: true, message: result.message});
+          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          res.json({success: false, error: msg});
+        }
+        return;
+      }
+
+      res.status(400).json({error: "Unknown action: " + action});
+      return;
+    }
+
+    res.status(405).json({error: "Method not allowed"});
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("API error:", msg);
+    res.status(500).json({error: msg});
+  }
+});
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function getSharedDriveId(config: Record<string, unknown>): string {
+  const projects = (config.PROJECTS as string[]) || [];
+  const projectConfigs = (config.projectConfigs as Record<string, Record<string, string>>) || {};
+  if (projects.length === 1 && projectConfigs[projects[0]]) {
+    return projectConfigs[projects[0]].SHARED_DRIVE_ID || "";
+  }
+  return "";
+}
+
+function checkApiKey(key: string | undefined, config: Record<string, unknown>): boolean {
+  const stored = config.API_KEY as string;
+  if (!stored) return true;
+  return key === stored;
+}
+
+async function getKnownFeatures(
+  driveId: string
+): Promise<Array<{id: string; summary: string}>> {
+  const featureDocs = await docs.discoverFeatureDocs(driveId);
+  const features: Array<{id: string; summary: string}> = [];
+  for (const doc of featureDocs) {
+    try {
+      const content = await docs.readDocContent(doc.fileId);
+      features.push({id: doc.featureId, summary: content.substring(0, 500).trim()});
+    } catch { /* skip unreadable */ }
+  }
+  return features;
+}
+
+async function getFeatureDocStories(docId: string) {
+  const {google} = require("googleapis");
+  const auth = new google.auth.GoogleAuth({scopes: ["https://www.googleapis.com/auth/documents"]});
+  const docsApi = google.docs({version: "v1", auth});
+  const res = await docsApi.documents.get({documentId: docId});
+  const content = res.data.body?.content || [];
+  const stories: Array<{storyId: string; storyTitle: string; text: string}> = [];
+  const storyPattern = /^T?(F\d+S\d+)\.?\s*(.*)/i;
+
+  for (let i = 0; i < content.length; i++) {
+    const el = content[i];
+    if (!el.paragraph) continue;
+    const style = el.paragraph.paragraphStyle?.namedStyleType || "";
+    if (style !== "HEADING_3") continue;
+
+    let text = "";
+    for (const pe of el.paragraph.elements || []) {
+      if (pe.textRun?.content) text += pe.textRun.content;
+    }
+    text = text.replace(/\n$/, "");
+    const match = storyPattern.exec(text);
+    if (!match) continue;
+
+    const storyId = match[1].toUpperCase();
+    const storyTitle = match[2] || "";
+
+    // Find section end
+    let storyEnd = -1;
+    for (let j = i + 1; j < content.length; j++) {
+      const nextEl = content[j];
+      if (!nextEl.paragraph) continue;
+      const nextStyle = nextEl.paragraph.paragraphStyle?.namedStyleType || "";
+      if (nextStyle === "HEADING_3") {
+        storyEnd = nextEl.startIndex || 0;
+        break;
+      }
+    }
+    if (storyEnd === -1) {
+      const lastEl = content[content.length - 1];
+      storyEnd = (lastEl?.endIndex || 1) - 1;
+    }
+
+    // Read full story text
+    let storyText = "";
+    for (let k = i; k < content.length; k++) {
+      const sEl = content[k];
+      if (!sEl.paragraph) continue;
+      if ((sEl.startIndex || 0) < (el.startIndex || 0)) continue;
+      if ((sEl.startIndex || 0) >= storyEnd) break;
+      let pText = "";
+      for (const pe of sEl.paragraph.elements || []) {
+        if (pe.textRun?.content) pText += pe.textRun.content;
+      }
+      pText = pText.replace(/\n$/, "");
+      if (storyText) storyText += "\n";
+      storyText += pText;
+    }
+
+    stories.push({storyId, storyTitle, text: storyText});
+  }
+
+  return {stories, title: res.data.title || ""};
+}
+
+async function handleApplyOperation(
+  payload: Record<string, unknown>,
+  res: import("express").Response
+) {
+  const patchId = payload.patchId as string;
+  const operationIndex = payload.operationIndex as number;
+  const force = payload.force as boolean;
+
+  const patchData = await firestore.getPatch(patchId);
+  if (!patchData) {
+    res.json({error: "Patch not found: " + patchId});
+    return;
+  }
+
+  const operations = (patchData.operations as Array<Record<string, unknown>>) || [];
+  if (operationIndex < 0 || operationIndex >= operations.length) {
+    res.json({error: "Invalid operation index"});
+    return;
+  }
+
+  const op = operations[operationIndex];
+  if (op._applied || op._dismissed) {
+    res.json({error: "Operation already resolved"});
+    return;
+  }
+
+  try {
+    if (patchData.patchType === "task") {
+      await applyTaskPatchOperation(op);
+    } else {
+      const targetDocId = patchData.targetDocId as string;
+      if (op.type === "update") {
+        if (force) {
+          const section = await docs.findStorySection(targetDocId, op.storyId as string);
+          if (section) {
+            await docs.applyStoryUpdate(targetDocId, op.storyId as string, op.proposedText as string, undefined, true);
+          } else {
+            await docs.applyStoryCreate(targetDocId, op.proposedText as string, undefined, true);
+          }
+        } else {
+          await docs.applyStoryUpdate(
+            targetDocId, op.storyId as string, op.proposedText as string, op.currentText as string, false
+          );
+        }
+      } else if (op.type === "create") {
+        await docs.applyStoryCreate(targetDocId, op.proposedText as string, op.storyId as string, force);
+      } else if (op.type === "delete") {
+        await docs.applyStoryDelete(targetDocId, op.storyId as string, op.currentText as string, force);
+      }
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    res.json({success: false, error: msg});
+    return;
+  }
+
+  operations[operationIndex]._applied = true;
+  await firestore.updatePatch(patchId, {operations});
+
+  const allResolved = operations.every((o) => o._applied || o._dismissed);
+  if (allResolved) {
+    await firestore.deletePatch(patchId);
+  }
+
+  res.json({success: true, operationIndex});
+}
+
+async function handleDismissOperation(
+  payload: Record<string, unknown>,
+  res: import("express").Response
+) {
+  const patchId = payload.patchId as string;
+  const operationIndex = payload.operationIndex as number;
+
+  const patchData = await firestore.getPatch(patchId);
+  if (!patchData) {
+    res.json({error: "Patch not found: " + patchId});
+    return;
+  }
+
+  const operations = (patchData.operations as Array<Record<string, unknown>>) || [];
+  if (operationIndex < 0 || operationIndex >= operations.length) {
+    res.json({error: "Invalid operation index"});
+    return;
+  }
+
+  operations[operationIndex]._dismissed = true;
+  await firestore.updatePatch(patchId, {operations});
+
+  const allResolved = operations.every((o) => o._applied || o._dismissed);
+  if (allResolved) {
+    await firestore.deletePatch(patchId);
+  }
+
+  res.json({success: true, operationIndex});
+}
+
+async function applyTaskPatchOperation(op: Record<string, unknown>) {
+  if (op.type === "create") {
+    await firestore.addTask({
+      id: (op.id as string) || "",
+      name: (op.summary as string) || "",
+      description: (op.description as string) || "",
+      acceptance_criteria: Array.isArray(op.acceptance_criteria)
+        ? op.acceptance_criteria.join("\n")
+        : (op.acceptance_criteria as string) || "",
+      notes: (op.notes as string) || "",
+      status: "To Do",
+      additional_notes: "",
+    });
+  } else if (op.type === "update") {
+    await firestore.updateTask((op.id as string) || "", {
+      name: op.summary as string,
+      description: op.description as string,
+      acceptance_criteria: Array.isArray(op.acceptance_criteria)
+        ? op.acceptance_criteria.join("\n")
+        : (op.acceptance_criteria as string) || "",
+      notes: op.notes as string,
+    });
+  } else if (op.type === "delete") {
+    await firestore.deleteTask((op.id as string) || "");
+  }
+}
+
+async function processFeatureDoc(fileId: string): Promise<{error?: string; message?: string}> {
+  const config = await firestore.getConfig();
+  const driveId = getSharedDriveId(config);
+  if (!driveId) return {error: "No drive configured"};
+
+  const content = await docs.readDocContent(fileId);
+  const fileName = await docs.getDocTitle(fileId);
+  if (!content.trim()) return {error: "Document is empty"};
+
+  const nameMatch = fileName.match(FEATURE_DOC_PATTERN);
+  if (!nameMatch) return {error: "Not a feature doc (no F<number> prefix): " + fileName};
+  const featureId = "F" + nameMatch[1];
+
+  const currentTasks = await firestore.getAllTasks(featureId);
+  let technicalNotes = "";
+  // Technical notes reading would go here if needed
+
+  const result = await gemini.callGeminiForTaskProposal(content, currentTasks as unknown as Record<string, unknown>[], featureId, technicalNotes);
+
+  const reasonMap: Record<string, string> = {};
+  for (const c of (result.changeSummary as Array<Record<string, string>>) || []) {
+    if (c.taskId) reasonMap[c.taskId] = c.reason || "";
+  }
+
+  const operations: Array<Record<string, unknown>> = [];
+  for (const t of (result.updates as Array<Record<string, unknown>>) || []) {
+    operations.push({...t, type: "update", reason: (t.reason as string) || reasonMap[t.id as string] || "", _applied: false, _dismissed: false});
+  }
+  for (const t of (result.creates as Array<Record<string, unknown>>) || []) {
+    operations.push({...t, type: "create", reason: (t.reason as string) || reasonMap[t.id as string] || "", _applied: false, _dismissed: false});
+  }
+  for (const t of (result.deletes as Array<Record<string, unknown>>) || []) {
+    operations.push({...t, type: "delete", reason: (t.reason as string) || reasonMap[t.id as string] || "", _applied: false, _dismissed: false});
+  }
+
+  if (!operations.length) return {message: "No task changes needed for " + featureId};
+
+  const taskPatchData = {
+    patchType: "task",
+    featureId,
+    targetSpreadsheetId: "",
+    targetSpreadsheetUrl: "",
+    sourceFileName: fileName,
+    sourceFileUrl: "https://docs.google.com/document/d/" + fileId + "/edit",
+    createdAt: new Date().toISOString(),
+    operations,
+  };
+
+  const dateStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+  const patchId = featureId + "-task-patch-" + dateStr + "-" + Date.now();
+  await firestore.savePatch(patchId, taskPatchData);
+
+  return {message: "Created task patch " + patchId + " (" + operations.length + " operations)"};
+}

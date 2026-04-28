@@ -6,13 +6,6 @@ function doGet(e) {
   var action = e.parameter.action;
 
   // Endpoints that don't require isConfigured
-  if (action === 'get_activity_log') {
-    return _jsonResponse({ log: getActivityLog() });
-  }
-  if (action === 'list_bugs') {
-    var bugs = getAllBugs();
-    return _jsonResponse({ bugs: bugs });
-  }
   if (action === 'list_tasks') {
     var tasks = getAllTasks();
     return _jsonResponse({ tasks: tasks });
@@ -53,15 +46,6 @@ function doGet(e) {
   if (action === 'get_task_row') {
     return _handleGetTaskRow(e);
   }
-  if (action === 'get_bug_data') {
-    if (!_checkApiKey(e.parameter.key)) return _jsonResponse({ error: 'Unauthorized' }, 401);
-    var bugId = e.parameter.bugId;
-    if (!bugId) return _jsonResponse({ error: 'Missing bugId' });
-    var bug = getBugById(bugId);
-    if (!bug) return _jsonResponse({ error: 'Bug not found: ' + bugId, bug: null });
-    return _jsonResponse({ bug: bug });
-  }
-
   // Unknown action or no action
   if (!action) {
     return _handleSetup(e);
@@ -165,7 +149,7 @@ function doPost(e) {
       if (!payload.fileId) return _jsonResponse({ error: 'fileId required' }, 400);
       try {
         Drive.Files.update({ trashed: true }, payload.fileId, null, { supportsAllDrives: true });
-        logActivity('Deleted feature doc: ' + (payload.fileName || payload.fileId));
+        Logger.log('Deleted feature doc: ' + (payload.fileName || payload.fileId));
         return _jsonResponse({ success: true });
       } catch (e) {
         return _jsonResponse({ success: false, error: e.message });
@@ -176,7 +160,7 @@ function doPost(e) {
         applyStoryUpdate(payload.docId, payload.storyId, payload.proposedText, null, true);
         return _jsonResponse({ success: true });
       } catch (e) {
-        logActivity('update_story error: ' + (e.message || String(e)));
+        Logger.log('update_story error: ' + (e.message || String(e)));
         return _jsonResponse({ success: false, error: e.message || String(e) || 'Unknown error in update_story' });
       }
     } else if (action === 'create_story') {
@@ -185,7 +169,7 @@ function doPost(e) {
         applyStoryCreate(payload.docId, payload.proposedText, payload.storyId, true);
         return _jsonResponse({ success: true });
       } catch (e) {
-        logActivity('create_story error: ' + (e.message || String(e)));
+        Logger.log('create_story error: ' + (e.message || String(e)));
         return _jsonResponse({ success: false, error: e.message || String(e) || 'Unknown error in create_story' });
       }
     } else if (action === 'delete_story') {
@@ -196,49 +180,6 @@ function doPost(e) {
       } catch (e) {
         return _jsonResponse({ success: false, error: e.message });
       }
-    } else if (action === 'create_bug') {
-      var bugName = payload.name || '';
-      if (!bugName && (payload.steps_to_reproduce || payload.actual)) {
-        try {
-          bugName = callGeminiForBugName(payload.steps_to_reproduce || '', payload.actual || '');
-        } catch (e) {
-          Logger.log('Bug name generation failed: ' + e.message);
-          logActivity('Bug name generation failed: ' + e.message);
-          bugName = '';
-        }
-      }
-      var bugId = addBug({
-        name: bugName,
-        steps_to_reproduce: payload.steps_to_reproduce || '',
-        expected: payload.expected || '',
-        actual: payload.actual || '',
-        notes: payload.notes || '',
-        status: payload.status || 'To Do',
-        environment: payload.environment || '',
-        reporter: payload.reporter || '',
-        additional_notes: payload.additional_notes || '',
-      });
-      return _jsonResponse({ success: true, bugId: bugId, name: bugName });
-    } else if (action === 'update_bug') {
-      if (!payload.bugId) return _jsonResponse({ error: 'bugId is required' }, 400);
-      var bugUpdates = {};
-      if (payload.name !== undefined) bugUpdates.name = payload.name;
-      if (payload.steps_to_reproduce !== undefined) bugUpdates.steps_to_reproduce = payload.steps_to_reproduce;
-      if (payload.expected !== undefined) bugUpdates.expected = payload.expected;
-      if (payload.actual !== undefined) bugUpdates.actual = payload.actual;
-      if (payload.notes !== undefined) bugUpdates.notes = payload.notes;
-      if (payload.status !== undefined) bugUpdates.status = payload.status;
-      if (payload.environment !== undefined) bugUpdates.environment = payload.environment;
-      if (payload.reporter !== undefined) bugUpdates.reporter = payload.reporter;
-      if (payload.additional_notes !== undefined) bugUpdates.additional_notes = payload.additional_notes;
-      var bugUpdated = updateBug(payload.bugId, bugUpdates);
-      if (!bugUpdated) return _jsonResponse({ error: 'Bug not found: ' + payload.bugId }, 404);
-      return _jsonResponse({ success: true, bugId: payload.bugId });
-    } else if (action === 'delete_bug') {
-      if (!payload.bugId) return _jsonResponse({ error: 'bugId is required' }, 400);
-      var bugDeleted = deleteBug(payload.bugId);
-      if (!bugDeleted) return _jsonResponse({ error: 'Bug not found: ' + payload.bugId }, 404);
-      return _jsonResponse({ success: true, bugId: payload.bugId });
     } else if (action === 'update_task') {
       if (!payload.taskId) return _jsonResponse({ error: 'taskId is required' }, 400);
       var updates = {};
@@ -252,8 +193,9 @@ function doPost(e) {
       if (!updated) return _jsonResponse({ error: 'Task not found: ' + payload.taskId }, 404);
       return _jsonResponse({ success: true, taskId: payload.taskId });
     } else if (action === 'identify_features') {
+      if (!payload.fileId) return _jsonResponse({ error: 'fileId is required' }, 400);
       try {
-        var idResult = identifyFeaturesFromSummary();
+        var idResult = identifyFeaturesFromSummary(payload.fileId);
         if (idResult.error) return _jsonResponse({ success: false, error: idResult.error });
         return _jsonResponse({ success: true, data: idResult });
       } catch (idErr) {
@@ -266,7 +208,7 @@ function doPost(e) {
         return _jsonResponse({ success: true, data: normResult });
       } catch (normErr) {
         var normMsg = normErr.message || String(normErr);
-        logActivity('Normalize error for ' + payload.featureId + ': ' + normMsg);
+        Logger.log('Normalize error for ' + payload.featureId + ': ' + normMsg);
         return _jsonResponse({ success: false, error: normMsg });
       }
     } else if (action === 'generate_patch_plan') {
@@ -276,7 +218,7 @@ function doPost(e) {
         return _jsonResponse({ success: true, step: gpResult.step });
       } catch (gpErr) {
         var gpMsg = gpErr.message || String(gpErr);
-        logActivity('Patch plan error for ' + payload.featureId + ': ' + gpMsg);
+        Logger.log('Patch plan error for ' + payload.featureId + ': ' + gpMsg);
         return _jsonResponse({ success: false, error: gpMsg });
       }
     } else if (action === 'update_technical_notes') {
@@ -287,29 +229,15 @@ function doPost(e) {
       } catch (utErr) {
         return _jsonResponse({ success: false, error: utErr.message });
       }
-    } else if (action === 'process_feature_patch') {
-      try {
-        var pfResult = processFeaturePatch(payload.fileId, payload.fileName, payload.featureId);
-        if (pfResult.error) return _jsonResponse({ success: false, error: pfResult.error });
-        return _jsonResponse({ success: true, step: pfResult.step });
-      } catch (pfErr) {
-        return _jsonResponse({ success: false, error: pfErr.message });
-      }
-    } else if (action === 'process_summary') {
-      try {
-        var debug = processLastSummary();
-        return _jsonResponse({ success: true, debug: debug || { steps: ['Completed with no debug info'] } });
-      } catch (summaryErr) {
-        return _jsonResponse({ success: false, error: summaryErr.message, debug: { steps: ['ERROR: ' + summaryErr.message] } });
-      }
     } else if (action === 'process_feature_doc') {
+      if (!payload.fileId) return _jsonResponse({ error: 'fileId is required' }, 400);
       try {
-        logActivity('Processing last feature document change...');
-        processLastFeatureDocEdit();
-        logActivity('Feature document processing complete');
-        return _jsonResponse({ success: true, message: 'Feature document processed' });
+        var feResult = processFeatureDoc(payload.fileId);
+        if (feResult.error) return _jsonResponse({ success: false, error: feResult.error });
+        Logger.log(feResult.message);
+        return _jsonResponse({ success: true, message: feResult.message });
       } catch (feErr) {
-        logActivity('Feature doc processing error: ' + feErr.message);
+        Logger.log('Feature doc processing error: ' + feErr.message);
         return _jsonResponse({ success: false, error: feErr.message });
       }
     } else {
@@ -501,18 +429,18 @@ function _handleApplyOperation(patchId, operationIndex, force) {
         }
       }
     } catch (applyErr) {
-      logActivity('Apply error on ' + patchId + ' op ' + operationIndex + ': ' + applyErr.message);
+      Logger.log('Apply error on ' + patchId + ' op ' + operationIndex + ': ' + applyErr.message);
       return _jsonResponse({ success: false, error: applyErr.message });
     }
 
     operations[operationIndex]._applied = true;
     updatePatchFile(match.fileId, patchContent);
 
-    logActivity('Applied operation ' + operationIndex + ' on ' + patchId + (force ? ' (forced)' : ''));
+    Logger.log('Applied operation ' + operationIndex + ' on ' + patchId + (force ? ' (forced)' : ''));
 
     if (_allOperationsResolved(operations)) {
       deletePatchFile(match.fileId);
-      logActivity('All operations resolved, deleted patch ' + patchId);
+      Logger.log('All operations resolved, deleted patch ' + patchId);
     }
 
     return _jsonResponse({ success: true, operationIndex: operationIndex });
@@ -711,7 +639,7 @@ function _handleCreateFeatureDoc(driveId, featureId, featureName) {
   _fixStoryParagraphStyles(file.id, 1, templateText);
 
   var docUrl = 'https://docs.google.com/document/d/' + file.id + '/edit';
-  logActivity('Created feature doc: ' + docName);
+  Logger.log('Created feature doc: ' + docName);
 
   return _jsonResponse({
     success: true,
@@ -722,6 +650,8 @@ function _handleCreateFeatureDoc(driveId, featureId, featureName) {
 function _allOperationsResolved(operations) {
   return operations.every(function(op) { return op._applied || op._dismissed; });
 }
+
+
 
 function _jsonResponse(data, statusCode) {
   var output = ContentService.createTextOutput(JSON.stringify(data))

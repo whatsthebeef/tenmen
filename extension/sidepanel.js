@@ -3,7 +3,7 @@
 // ============================================================
 
 var state = {
-  webAppUrl: '',
+  webAppUrl: 'https://api-fwtntp24za-uc.a.run.app',
   activeView: 'patches',
   allPatches: null,
   loadedPatches: {},
@@ -31,187 +31,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Load saved config
-  chrome.storage.local.get(['webAppUrl'], function(result) {
-    if (result.webAppUrl) {
-      state.webAppUrl = result.webAppUrl;
-      document.getElementById('web-app-url').value = result.webAppUrl;
-      document.getElementById('config-bar').style.display = 'none';
-      document.getElementById('view-tabs').style.display = '';
-      checkConfigured();
-      fetchAllPatches();
-    }
-  });
+  // Load initial data
+  checkConfigured();
+  fetchAllPatches();
 
-  // Save config button
-  document.getElementById('save-config').addEventListener('click', function() {
-    var url = document.getElementById('web-app-url').value.trim();
-    if (url) {
-      state.webAppUrl = url;
-      chrome.storage.local.set({ webAppUrl: url });
-      document.getElementById('config-bar').style.display = 'none';
-      document.getElementById('view-tabs').style.display = '';
-      fetchAllPatches();
-    }
-  });
-
-  // Action buttons
+  // Action buttons — open picker then process
   document.getElementById('btn-process-summary').addEventListener('click', function() {
-    var btn = this;
-    btn.disabled = true;
-    var debugEl = document.getElementById('debug-output');
-    debugEl.style.display = 'none';
-    var steps = [];
-
-    function updateDebug(title) {
-      _showDebugCard(debugEl, title, steps);
-    }
-
-    btn.textContent = 'Identifying features...';
-    steps.push('Identifying relevant features...');
-    updateDebug('Processing');
-
-    apiPost(state.webAppUrl, { action: 'identify_features' }, function(response) {
-      if (!response || !response.ok || !response.data || !response.data.success) {
-        var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
-        steps.push('ERROR: ' + err);
-        updateDebug('Error');
-        btn.disabled = false;
-        btn.textContent = 'Process Last Meeting Summary';
-        return;
-      }
-
-      var idData = response.data.data;
-      steps.push('Read summary: ' + idData.fileName + ' (' + idData.contentLength + ' chars)');
-      steps.push('Found ' + idData.knownFeatures.length + ' feature doc(s)');
-
-      if (!idData.featureIds.length) {
-        steps.push('Gemini found no relevant features');
-        updateDebug('Processing complete');
-        btn.disabled = false;
-        btn.textContent = 'Process Last Meeting Summary';
-        return;
-      }
-
-      steps.push('Gemini identified features: ' + idData.featureIds.join(', '));
-      updateDebug('Processing');
-
-      // Process each feature: normalize → patch plan (sequential), technical notes (parallel)
-      var featureIds = idData.featureIds.slice();
-      var hasPatch = false;
-
-      function processNext() {
-        if (!featureIds.length) {
-          var title = steps.some(function(s) { return s.indexOf('ERROR') >= 0; })
-            ? 'Processing completed with errors' : 'Processing complete';
-          updateDebug(title);
-          btn.disabled = false;
-          btn.textContent = 'Process Last Meeting Summary';
-          if (hasPatch) {
-            setTimeout(function() { fetchAllPatches(); }, 1000);
-          }
-          return;
-        }
-
-        var fId = featureIds.shift();
-        btn.textContent = 'Normalizing ' + fId + '...';
-        steps.push(fId + ': Normalizing...');
-        updateDebug('Processing');
-
-        // Fire off technical notes in parallel (don't wait for it)
-        apiPost(state.webAppUrl, {
-          action: 'update_technical_notes',
-          fileId: idData.fileId,
-          featureId: fId,
-        }, function() { /* fire and forget */ });
-
-        // Step 1: Normalize
-        apiPost(state.webAppUrl, {
-          action: 'normalize_feature',
-          fileId: idData.fileId,
-          featureId: fId,
-        }, function(normResp) {
-          steps.pop();
-          if (!normResp || !normResp.ok || !normResp.data || !normResp.data.success) {
-            var err = (normResp && normResp.data && normResp.data.error) || 'Unknown error';
-            steps.push(fId + ': ERROR normalizing: ' + err);
-            updateDebug('Processing');
-            processNext();
-            return;
-          }
-
-          var normData = normResp.data.data;
-          btn.textContent = 'Generating patch for ' + fId + '...';
-          steps.push(fId + ': Generating patch plan...');
-          updateDebug('Processing');
-
-          // Step 2: Generate patch plan
-          apiPost(state.webAppUrl, {
-            action: 'generate_patch_plan',
-            fileId: idData.fileId,
-            fileName: idData.fileName,
-            featureId: fId,
-            normalizedDoc: normData.normalizedDoc,
-            comments: normData.comments,
-            docFileId: normData.docFileId,
-            docFileName: normData.docFileName,
-          }, function(patchResp) {
-            steps.pop();
-            if (patchResp && patchResp.ok && patchResp.data && patchResp.data.step) {
-              steps.push(patchResp.data.step);
-              if (patchResp.data.step.indexOf('Created patch') >= 0) hasPatch = true;
-            } else {
-              var err = (patchResp && patchResp.data && patchResp.data.error) || 'Unknown error';
-              steps.push(fId + ': ERROR: ' + err);
-            }
-            updateDebug('Processing');
-            processNext();
-          });
-        });
-      }
-
-      processNext();
-    });
+    openPickerAndProcess('docs', _processSummaryWithFile);
   });
 
   document.getElementById('btn-process-feature').addEventListener('click', function() {
-    var btn = this;
-    btn.disabled = true;
-    btn.textContent = 'Processing...';
-    var debugEl = document.getElementById('debug-output');
-    debugEl.style.display = 'none';
-
-    apiPost(state.webAppUrl, { action: 'process_feature_doc' }, function(response) {
-      btn.disabled = false;
-      btn.textContent = 'Process Last Feature Document Change';
-
-      if (!response) {
-        _showDebugCard(debugEl, 'Error', ['No response from server']);
-        return;
-      }
-      if (!response.ok) {
-        var errSteps = ['Connection error: ' + (response.error || 'unknown')];
-        if (response.raw) errSteps.push(response.raw);
-        _showDebugCard(debugEl, 'Error', errSteps);
-        return;
-      }
-      var data = response.data || {};
-      if (data.error) {
-        _showDebugCard(debugEl, 'Error', [data.error]);
-      } else {
-        _showDebugCard(debugEl, 'Complete', [data.message || 'Feature document processed']);
-        setTimeout(function() { fetchAllPatches(); }, 1000);
-      }
-    });
-  });
-
-  document.getElementById('btn-reload').addEventListener('click', function() {
-    var btn = this;
-    btn.disabled = true;
-    btn.textContent = 'Fetching...';
-    state._reloadBtn = btn;
-    state.hasFetchedOnce = false;
-    fetchAllPatches();
+    _openFeatureDocPicker(_processFeatureDocWithFile);
   });
 
   document.getElementById('btn-patch-back').addEventListener('click', backToPatchIndex);
@@ -221,27 +51,21 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('btn-doc-back').addEventListener('click', backToDocList);
   document.getElementById('btn-new-feature-doc').addEventListener('click', showNewDocForm);
   document.getElementById('btn-add-story').addEventListener('click', addNewStory);
-  document.getElementById('btn-bug-back').addEventListener('click', backToBugList);
-  document.getElementById('btn-bug-save').addEventListener('click', saveBugDetail);
-  document.getElementById('btn-bug-delete').addEventListener('click', deleteBugDetail);
-  document.getElementById('btn-new-bug').addEventListener('click', createNewBug);
-
-  document.getElementById('bug-filter-input').addEventListener('input', function() {
-    var filter = this.value.trim().toUpperCase();
-    document.getElementById('bug-filter-clear').style.display = filter ? '' : 'none';
-    var items = document.querySelectorAll('#bug-list .bug-item');
-    items.forEach(function(item) {
-      var id = item.querySelector('.bug-id');
-      var bugId = id ? id.textContent.toUpperCase() : '';
-      item.style.display = (!filter || bugId.indexOf(filter) === 0) ? '' : 'none';
-    });
+  // File browser
+  var _searchTimeout = null;
+  document.getElementById('file-browser-search').addEventListener('input', function() {
+    var q = this.value.trim();
+    clearTimeout(_searchTimeout);
+    if (q.length >= 2) {
+      _searchTimeout = setTimeout(function() { _searchDriveFiles(q); }, 300);
+    } else if (q.length === 0) {
+      document.getElementById('file-browser-results').innerHTML = '';
+      document.getElementById('file-browser-status').textContent = 'Type to search Google Drive...';
+    }
   });
-
-  document.getElementById('bug-filter-clear').addEventListener('click', function() {
-    var input = document.getElementById('bug-filter-input');
-    input.value = '';
-    input.dispatchEvent(new Event('input'));
-    input.focus();
+  document.getElementById('btn-file-browser-cancel').addEventListener('click', function() {
+    document.getElementById('file-browser-overlay').style.display = 'none';
+    state._pickerCallback = null;
   });
 
   document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
@@ -276,22 +100,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 // ============================================================
-// API calls (routed through background.js)
+// API calls — only used for Cloud Function (Gemini processing)
 // ============================================================
-
-function apiGet(url, callback) {
-  try {
-    chrome.runtime.sendMessage({ type: 'api_get', url: url }, function(response) {
-      if (chrome.runtime.lastError) {
-        callback({ ok: false, error: chrome.runtime.lastError.message });
-        return;
-      }
-      callback(response);
-    });
-  } catch (e) {
-    callback({ ok: false, error: e.message });
-  }
-}
 
 function apiPost(url, body, callback) {
   try {
@@ -307,6 +117,112 @@ function apiPost(url, body, callback) {
   }
 }
 
+// apiPost with user OAuth token for endpoints that need Docs/Drive access
+function apiPostWithToken(url, body, callback) {
+  googleApi.getToken(function(token, err) {
+    if (!token) { callback({ ok: false, error: err || 'No token' }); return; }
+    body._userToken = token;
+    apiPost(url, body, callback);
+  });
+}
+
+// ============================================================
+// Jira API
+// ============================================================
+
+var JIRA_DOMAIN = 'pocketlab1.atlassian.net';
+
+function _jiraAuth(callback) {
+  firestoreClient.getConfig(function(config) {
+    var email = config.JIRA_EMAIL;
+    var token = config.JIRA_TOKEN;
+    var project = config.JIRA_PROJECT;
+    if (!email || !token || !project) {
+      callback(null, 'Jira not configured. Set email, token, and project key in Settings.');
+      return;
+    }
+    callback({
+      auth: 'Basic ' + btoa(email + ':' + token),
+      project: project,
+    });
+  });
+}
+
+function _jiraRequest(path, method, body, callback) {
+  _jiraAuth(function(creds, err) {
+    if (!creds) { callback(null, err); return; }
+    var url = 'https://' + JIRA_DOMAIN + '/rest/api/3' + path;
+    var opts = {
+      method: method || 'GET',
+      headers: {
+        'Authorization': creds.auth,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    };
+    if (body) opts.body = JSON.stringify(body);
+    fetch(url, opts)
+      .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error('Jira ' + r.status + ': ' + t.substring(0, 300)); });
+        if (r.status === 204) return null;
+        return r.json();
+      })
+      .then(function(data) { callback(data); })
+      .catch(function(e) { callback(null, e.message); });
+  });
+}
+
+function _buildJiraDescription(task) {
+  var parts = [];
+  if (task.description) {
+    parts.push({ type: 'paragraph', content: [{ type: 'text', text: task.description }] });
+  }
+  if (task.acceptance_criteria) {
+    parts.push({ type: 'paragraph', content: [{ type: 'text', text: 'Acceptance Criteria', marks: [{ type: 'strong' }] }] });
+    var lines = task.acceptance_criteria.split('\n').filter(function(l) { return l.trim(); });
+    lines.forEach(function(line) {
+      parts.push({ type: 'paragraph', content: [{ type: 'text', text: line }] });
+    });
+  }
+  var combinedNotes = [task.notes || '', task.additional_notes || ''].filter(function(n) { return n.trim(); }).join('\n\n');
+  if (combinedNotes) {
+    parts.push({ type: 'paragraph', content: [{ type: 'text', text: 'Implementation Notes', marks: [{ type: 'strong' }] }] });
+    parts.push({ type: 'paragraph', content: [{ type: 'text', text: combinedNotes }] });
+  }
+  return { version: 1, type: 'doc', content: parts };
+}
+
+function createJiraIssue(task, callback) {
+  _jiraAuth(function(creds, err) {
+    if (!creds) { callback(null, err); return; }
+    var body = {
+      fields: {
+        project: { key: creds.project },
+        summary: task.id + ' ' + (task.name || ''),
+        description: _buildJiraDescription(task),
+        issuetype: { name: 'Story' },
+      },
+    };
+    _jiraRequest('/issue', 'POST', body, function(data, jiraErr) {
+      if (jiraErr) { callback(null, jiraErr); return; }
+      callback({ key: data.key, id: data.id });
+    });
+  });
+}
+
+function updateJiraIssue(jiraKey, task, callback) {
+  var body = {
+    fields: {
+      summary: task.id + ' ' + (task.name || ''),
+      description: _buildJiraDescription(task),
+    },
+  };
+  _jiraRequest('/issue/' + jiraKey, 'PUT', body, function(data, err) {
+    if (err) { callback(false, err); return; }
+    callback(true);
+  });
+}
+
 // ============================================================
 // Fetch patches — get all patches, group by source, show oldest
 // ============================================================
@@ -314,10 +230,7 @@ function apiPost(url, body, callback) {
 function fetchAllPatches() {
   if (state.activeView !== 'patches') return;
   if (state.fetching) return;
-  if (!state.webAppUrl) {
-    document.getElementById('config-bar').style.display = 'block';
-    return;
-  }
+  if (!state.webAppUrl) return;
 
   // Show loading on first fetch
   if (!state.hasFetchedOnce) {
@@ -329,24 +242,17 @@ function fetchAllPatches() {
   document.getElementById('source-section').style.display = 'none';
 
   state.fetching = true;
-  var url = state.webAppUrl + '?action=list_patches';
-  apiGet(url, function(response) {
+  firestoreClient.getAllPatches(function(allPatches, err) {
     state.fetching = false;
     state.hasFetchedOnce = true;
     document.getElementById('loading').style.display = 'none';
-    _resetReloadBtn();
     if (state.activeView !== 'patches') return;
 
-    if (!response || !response.ok) {
+    if (err) {
       var debugEl = document.getElementById('debug-output');
-      var errSteps = ['Failed to load patches'];
-      if (response && response.error) errSteps.push(response.error);
-      if (response && response.raw) errSteps.push(response.raw);
-      _showDebugCard(debugEl, 'Error', errSteps);
+      _showDebugCard(debugEl, 'Error', ['Failed to load patches', err]);
       return;
     }
-
-    var allPatches = response.data.patches || [];
     if (!allPatches.length) {
       setStatus('No patches available', 'empty');
       return;
@@ -369,12 +275,11 @@ function fetchAllPatches() {
 }
 
 function loadPatch(patchInfo, callback) {
-  var url = state.webAppUrl + '?action=get_patch&patchId=' + encodeURIComponent(patchInfo.patchId);
-  apiGet(url, function(response) {
-    if (response && response.ok) {
+  firestoreClient.getPatch(patchInfo.patchId, function(data, err) {
+    if (data) {
       state.loadedPatches[patchInfo.patchId] = {
         info: patchInfo,
-        data: response.data,
+        data: data,
       };
     }
     if (callback) callback();
@@ -462,8 +367,8 @@ function _buildPatchCard(p) {
       if (!confirm('Delete this patch?')) return;
       deleteBtn.disabled = true;
       deleteBtn.textContent = 'Deleting...';
-      apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
-        if (response && response.ok && response.data && response.data.success) {
+      firestoreClient.deletePatch(patchId, function(success) {
+        if (success) {
           cardEl.remove();
           state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
           delete state.loadedPatches[patchId];
@@ -489,7 +394,8 @@ function openPatchDetail(patchInfo, docUrl) {
     });
   }
 
-  // Hide tabs, show back button
+  // Hide tabs and actions, show back button
+  document.getElementById('patch-actions').style.display = 'none';
   document.getElementById('view-tabs').style.display = 'none';
   document.getElementById('patch-back').style.display = 'block';
   document.getElementById('patch-index').innerHTML = '';
@@ -541,10 +447,10 @@ function deleteCurrentPatch() {
   btn.disabled = true;
   btn.textContent = 'Deleting...';
 
-  apiPost(state.webAppUrl, { action: 'delete_patch', patchId: patchId }, function(response) {
+  firestoreClient.deletePatch(patchId, function(success) {
     btn.disabled = false;
     btn.textContent = 'Delete Patch';
-    if (response && response.ok && response.data && response.data.success) {
+    if (success) {
       state.allPatches = (state.allPatches || []).filter(function(pp) { return pp.patchId !== patchId; });
       delete state.loadedPatches[patchId];
       backToPatchIndex();
@@ -555,6 +461,7 @@ function deleteCurrentPatch() {
 function backToPatchIndex() {
   document.getElementById('patch-list').innerHTML = '';
   document.getElementById('patch-back').style.display = 'none';
+  document.getElementById('patch-actions').style.display = '';
   document.getElementById('source-section').style.display = 'none';
   document.getElementById('view-tabs').style.display = '';
   state.currentPatch = null;
@@ -722,12 +629,6 @@ function renderTaskOperation(op, index, patchId) {
     reasonIcon.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
     header.appendChild(reasonIcon);
   }
-  if (op.id && op.type !== 'create') {
-    header.style.cursor = 'pointer';
-    header.addEventListener('click', (function(taskId) {
-      return function() { scrollToTask(taskId); };
-    })(op.id));
-  }
   div.appendChild(header);
 
   // Fields — `key` is the live task field name; `opKey` is the operation field name
@@ -752,10 +653,8 @@ function renderTaskOperation(op, index, patchId) {
     fieldsContainer.innerHTML = '<span style="color:#5f6368;">Loading...</span>';
     div.appendChild(fieldsContainer);
 
-    var url = state.webAppUrl + '?action=get_task_data&taskId=' + encodeURIComponent(op.id);
-    apiGet(url, function(response) {
+    firestoreClient.getTaskById(op.id, function(liveTask) {
       fieldsContainer.innerHTML = '';
-      var liveTask = (response && response.ok && response.data) ? response.data.task : null;
 
       fields.forEach(function(f) {
         var liveVal = liveTask ? (liveTask[f.key] || '') : '';
@@ -899,11 +798,8 @@ function renderOperation(op, index, patchId) {
   if (op.type === 'update' && op.storyId && state.currentPatch && state.currentPatch.targetDocId) {
     diffDiv.innerHTML = '<span style="color:#5f6368;">Loading diff...</span>';
     var docId = state.currentPatch.targetDocId;
-    var url = state.webAppUrl + '?action=get_story_text&docId=' + encodeURIComponent(docId) + '&storyId=' + encodeURIComponent(op.storyId);
-    apiGet(url, function(response) {
-      if (response && response.ok && response.data && response.data.text) {
-        opState.liveText = response.data.text;
-      }
+    googleApi.getStoryText(docId, op.storyId, function(text) {
+      if (text) opState.liveText = text;
       showDiff();
     });
   } else {
@@ -1005,30 +901,22 @@ function applyOperation(patchId, operationIndex, opDiv, btn, op) {
   var dismissBtn = opDiv.querySelector('.btn-dismiss');
   if (dismissBtn) dismissBtn.disabled = true;
 
-  apiPost(state.webAppUrl, {
-    action: 'apply_operation',
-    patchId: patchId,
-    operationIndex: operationIndex,
-  }, function(response) {
-    console.log('apply_operation response:', JSON.stringify(response));
-    var success = response && response.ok && response.data && response.data.success;
+  _doApplyOperation(patchId, operationIndex, op, false, function(success, err) {
     if (success) {
       var loaded = state.loadedPatches[patchId];
       if (loaded && loaded.data && loaded.data.operations && loaded.data.operations[operationIndex]) {
         loaded.data.operations[operationIndex]._applied = true;
       }
+      // Update Firestore
+      if (loaded && loaded.data) {
+        firestoreClient.updatePatch(patchId, { operations: loaded.data.operations }, function() {});
+      }
       opDiv.style.display = 'none';
       checkAllDone();
       return;
     }
-
-    // Apply failed — show error with Apply Anyway and Dismiss
     opDiv.style.opacity = '';
-    var err = (response && response.data && response.data.error)
-      || (response && response.error)
-      || 'Apply failed';
-    console.log('apply error:', err);
-    _showApplyError(opDiv, patchId, operationIndex, op, err);
+    _showApplyError(opDiv, patchId, operationIndex, op, err || 'Apply failed');
   });
 }
 
@@ -1074,28 +962,71 @@ function _showApplyError(opDiv, patchId, operationIndex, op, err) {
   opDiv.appendChild(block);
 }
 
+function _doApplyOperation(patchId, operationIndex, op, force, callback) {
+  var loaded = state.loadedPatches[patchId];
+  if (!loaded || !loaded.data) { callback(false, 'Patch not loaded'); return; }
+  var patchData = loaded.data;
+
+  if (patchData.patchType === 'task') {
+    // Task patch — apply to Firestore
+    if (op.type === 'create') {
+      firestoreClient.addTask({
+        id: op.id || '',
+        name: op.summary || '',
+        description: op.description || '',
+        acceptance_criteria: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || ''),
+        notes: op.notes || '',
+        status: 'To Do',
+      }, function(success, err) { callback(success, err); });
+    } else if (op.type === 'update') {
+      firestoreClient.updateTask(op.id || '', {
+        name: op.summary,
+        description: op.description,
+        acceptance_criteria: Array.isArray(op.acceptance_criteria) ? op.acceptance_criteria.join('\n') : (op.acceptance_criteria || ''),
+        notes: op.notes,
+      }, function(success, err) { callback(success, err); });
+    } else if (op.type === 'delete') {
+      firestoreClient.deleteTask(op.id || '', function(success, err) { callback(success, err); });
+    } else {
+      callback(false, 'Unknown operation type');
+    }
+  } else {
+    // Feature doc patch — apply to Google Doc
+    var targetDocId = patchData.targetDocId;
+    if (op.type === 'update') {
+      googleApi.applyStoryUpdate(targetDocId, op.storyId, op.proposedText, op.currentText, force, function(success, err) {
+        callback(success, err);
+      });
+    } else if (op.type === 'create') {
+      googleApi.applyStoryCreate(targetDocId, op.proposedText, op.storyId, force, function(success, err) {
+        callback(success, err);
+      });
+    } else if (op.type === 'delete') {
+      googleApi.applyStoryDelete(targetDocId, op.storyId, op.currentText, force, function(success, err) {
+        callback(success, err);
+      });
+    } else {
+      callback(false, 'Unknown operation type');
+    }
+  }
+}
+
 function forceApplyOperation(patchId, operationIndex, opDiv, op) {
   opDiv.style.opacity = '0.4';
-  apiPost(state.webAppUrl, {
-    action: 'apply_operation',
-    patchId: patchId,
-    operationIndex: operationIndex,
-    force: true,
-  }, function(response) {
-    var success = response && response.ok && response.data && response.data.success;
+  _doApplyOperation(patchId, operationIndex, op, true, function(success, err) {
     if (success) {
       var loaded = state.loadedPatches[patchId];
       if (loaded && loaded.data && loaded.data.operations && loaded.data.operations[operationIndex]) {
         loaded.data.operations[operationIndex]._applied = true;
       }
+      if (loaded && loaded.data) {
+        firestoreClient.updatePatch(patchId, { operations: loaded.data.operations }, function() {});
+      }
       opDiv.style.display = 'none';
       checkAllDone();
     } else {
       opDiv.style.opacity = '';
-      var err = (response && response.data && response.data.error)
-        || (response && response.error)
-        || 'Force apply failed';
-      _showApplyError(opDiv, patchId, operationIndex, op, err);
+      _showApplyError(opDiv, patchId, operationIndex, op, err || 'Force apply failed');
     }
   });
 }
@@ -1114,37 +1045,13 @@ function dismissOperation(patchId, operationIndex, opDiv, btn) {
     loaded.data.operations[operationIndex]._dismissed = true;
   }
 
-  // Fire API call in background
-  apiPost(state.webAppUrl, {
-    action: 'dismiss_operation',
-    patchId: patchId,
-    operationIndex: operationIndex,
-  }, function() { /* done */ });
+  // Update Firestore in background
+  var loadedPatch = state.loadedPatches[patchId];
+  if (loadedPatch && loadedPatch.data) {
+    firestoreClient.updatePatch(patchId, { operations: loadedPatch.data.operations }, function() {});
+  }
 }
 
-function scrollToTask(taskId) {
-  state.scrolling = true;
-  setTimeout(function() { state.scrolling = false; }, 3000);
-
-  apiGet(state.webAppUrl + '?action=get_task_row&taskId=' + encodeURIComponent(taskId), function(response) {
-    if (response && response.ok && response.data && response.data.row) {
-      var sheetId = response.data.sheetId;
-      var row = response.data.row;
-      // Use scripting to update the hash without reloading the page
-      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-        if (tabs.length) {
-          chrome.scripting.executeScript({
-            target: { tabId: tabs[0].id },
-            func: function(gid, range) {
-              window.location.hash = 'gid=' + gid + '&range=A' + range;
-            },
-            args: [sheetId, row],
-          });
-        }
-      });
-    }
-  });
-}
 
 function scrollToStory(storyId) {
   // Suppress URL change detection during scroll navigation
@@ -1210,57 +1117,23 @@ function loadSettings() {
   document.getElementById('settings-message').style.display = 'none';
   _setSettingsInputsEnabled(false);
 
-  apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
+  firestoreClient.getConfig(function(d) {
     _setSettingsInputsEnabled(true);
-    if (response && response.ok && response.data) {
-      var d = response.data;
-      document.getElementById('setting-gemini-key').value = d.GEMINI_API_KEY || '';
-      document.getElementById('setting-gemini-model').value = d.GEMINI_MODEL || '';
-      document.getElementById('setting-api-key').value = d.API_KEY || '';
-      _renderProjectSettings(d.PROJECTS || [], d.projectConfigs || {});
-    }
+    document.getElementById('setting-gemini-key').value = d.GEMINI_API_KEY || '';
+    document.getElementById('setting-gemini-model').value = d.GEMINI_MODEL || '';
+    document.getElementById('setting-jira-email').value = d.JIRA_EMAIL || '';
+    document.getElementById('setting-jira-token').value = d.JIRA_TOKEN || '';
+    document.getElementById('setting-jira-project').value = d.JIRA_PROJECT || '';
+    _renderProjectSettings(d.PROJECTS || [], d.projectConfigs || {});
   });
 
-  _refreshActivityLog();
-  // Auto-refresh while on settings tab
-  if (state._activityInterval) clearInterval(state._activityInterval);
-  state._activityInterval = setInterval(function() {
-    if (state.activeView !== 'settings') {
-      clearInterval(state._activityInterval);
-      state._activityInterval = null;
-      return;
-    }
-    _refreshActivityLog();
-  }, 15000);
-}
-
-function _refreshActivityLog() {
-  apiGet(state.webAppUrl + '?action=get_activity_log', function(response) {
-    var container = document.getElementById('activity-log');
-    if (!container) return;
-    container.innerHTML = '';
-    if (!response || !response.ok || !response.data) return;
-    var log = response.data.log || [];
-    if (!log.length) {
-      container.innerHTML = '<div style="color:#80868b;padding:4px 0;">No activity yet</div>';
-      return;
-    }
-    log.forEach(function(entry) {
-      var div = document.createElement('div');
-      div.className = 'activity-log-entry' + (entry.message.indexOf('Error') >= 0 ? ' error' : '');
-      var time = new Date(entry.time);
-      var timeStr = time.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      div.innerHTML = '<span class="activity-log-time">' + timeStr + '</span>' + escapeHtml(entry.message);
-      container.appendChild(div);
-    });
-  });
 }
 
 function _renderProjectSettings(projects, projectConfigs) {
   var container = document.getElementById('settings-projects');
   container.innerHTML = '';
   if (!projects.length) {
-    container.innerHTML = '<div style="font-size:12px;color:#5f6368;padding:6px 0;">No projects configured. Use auriculator.sh init to add projects.</div>';
+    container.innerHTML = '<div style="font-size:12px;color:#5f6368;padding:6px 0;">No projects configured. Add a project below with its Shared Drive ID.</div>';
     return;
   }
   projects.forEach(function(name) {
@@ -1276,10 +1149,13 @@ function _renderProjectSettings(projects, projectConfigs) {
     removeBtn.addEventListener('click', (function(projectName) {
       return function() {
         if (!confirm('Remove project "' + projectName + '"?')) return;
-        apiPost(state.webAppUrl, { action: 'remove_project', projectName: projectName }, function(response) {
-          if (response && response.ok && response.data && response.data.success) {
+        firestoreClient.getConfig(function(config) {
+          var projects = (config.PROJECTS || []).filter(function(p) { return p !== projectName; });
+          var projectConfigs = config.projectConfigs || {};
+          delete projectConfigs[projectName];
+          firestoreClient.saveConfig({ PROJECTS: projects, projectConfigs: projectConfigs }, function() {
             loadSettings();
-          }
+          });
         });
       };
     })(name));
@@ -1318,24 +1194,23 @@ function saveSettings() {
     projectConfigs[pName][field] = inp.value.trim();
   });
 
-  var payload = {
-    action: 'save_config',
+  var updates = {
     GEMINI_API_KEY: document.getElementById('setting-gemini-key').value.trim(),
     GEMINI_MODEL: document.getElementById('setting-gemini-model').value.trim(),
-    API_KEY: document.getElementById('setting-api-key').value.trim(),
+    JIRA_EMAIL: document.getElementById('setting-jira-email').value.trim(),
+    JIRA_TOKEN: document.getElementById('setting-jira-token').value.trim(),
+    JIRA_PROJECT: document.getElementById('setting-jira-project').value.trim(),
     projectConfigs: projectConfigs,
   };
-
-  apiPost(state.webAppUrl, payload, function(response) {
+  firestoreClient.saveConfig(updates, function(success, err) {
     _setSettingsInputsEnabled(true);
     btn.textContent = 'Save';
-    if (response && response.ok && response.data && response.data.success) {
-      msgEl.textContent = response.data.message || 'Settings saved.';
+    if (success) {
+      msgEl.textContent = 'Settings saved.';
       msgEl.className = 'settings-message success';
       msgEl.style.display = 'block';
     } else {
-      var err = (response && response.data) ? response.data.error : (response ? response.error : 'Unknown error');
-      msgEl.textContent = err;
+      msgEl.textContent = err || 'Save failed';
       msgEl.className = 'settings-message error';
       msgEl.style.display = 'block';
     }
@@ -1353,30 +1228,34 @@ function addProject() {
   btn.disabled = true;
   btn.textContent = 'Adding...';
 
-  apiPost(state.webAppUrl, { action: 'init_project', projectName: name, sharedDriveId: driveId }, function(response) {
-    btn.disabled = false;
-    btn.textContent = 'Add Project';
-    if (response && response.ok && response.data && response.data.success) {
-      nameEl.value = '';
-      driveEl.value = '';
-      loadSettings();
-    } else {
-      var msgEl = document.getElementById('settings-message');
-      var err = (response && response.data) ? response.data.error : 'Failed to add project';
-      msgEl.textContent = err;
-      msgEl.className = 'settings-message error';
-      msgEl.style.display = 'block';
-    }
+  firestoreClient.getConfig(function(config) {
+    var projects = config.PROJECTS || [];
+    if (projects.indexOf(name) === -1) projects.push(name);
+    var projectConfigs = config.projectConfigs || {};
+    projectConfigs[name] = { SHARED_DRIVE_ID: driveId };
+    firestoreClient.saveConfig({ PROJECTS: projects, projectConfigs: projectConfigs }, function(success, err) {
+      btn.disabled = false;
+      btn.textContent = 'Add Project';
+      if (success) {
+        nameEl.value = '';
+        driveEl.value = '';
+        loadSettings();
+      } else {
+        var msgEl = document.getElementById('settings-message');
+        err = err || 'Failed to add project';
+        msgEl.textContent = err;
+        msgEl.className = 'settings-message error';
+        msgEl.style.display = 'block';
+      }
+    });
   });
 }
 
 // Also show settings automatically if not configured
 function checkConfigured() {
-  if (!state.webAppUrl) return;
-  apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
-    if (response && response.ok && response.data && !response.data.configured) {
-      switchView('settings');
-    }
+  firestoreClient.getConfig(function(config) {
+    var configured = config.GEMINI_API_KEY && (config.PROJECTS || []).length;
+    if (!configured) switchView('settings');
   });
 }
 
@@ -1399,8 +1278,6 @@ function switchView(name) {
     loadSettings();
   } else if (name === 'patches') {
     fetchAllPatches();
-  } else if (name === 'bugs') {
-    fetchBugs();
   } else if (name === 'docs') {
     fetchFeatureDocs();
   }
@@ -1423,22 +1300,18 @@ function fetchTasks() {
   }
 
   // Fetch fresh data in the background
-  apiGet(state.webAppUrl + '?action=list_tasks', function(response) {
+  firestoreClient.getAllTasks(function(tasks, err) {
     document.getElementById('tasks-loading').style.display = 'none';
     if (state.activeView !== 'tasks') return;
     if (document.getElementById('task-detail').style.display !== 'none') return;
-    if (!response || !response.ok || !response.data || response.data.error) {
-      if (state.cachedTasks) return; // keep showing cached data on refresh error
-      var errSteps = ['Failed to load tasks'];
-      if (response && response.error) errSteps.push(response.error);
-      if (response && response.raw) errSteps.push(response.raw);
-      if (response && response.data && response.data.error) errSteps.push(response.data.error);
+    if (err) {
+      if (state.cachedTasks) return;
       var container = document.getElementById('task-list');
       container.innerHTML = '<div class="debug-output" id="tasks-debug"></div>';
-      _showDebugCard(document.getElementById('tasks-debug'), 'Error', errSteps);
+      _showDebugCard(document.getElementById('tasks-debug'), 'Error', ['Failed to load tasks', err]);
       return;
     }
-    var tasks = response.data.tasks || [];
+    tasks = tasks || [];
     state.cachedTasks = tasks;
     if (!tasks.length) {
       document.getElementById('task-list').innerHTML = '';
@@ -1542,6 +1415,86 @@ function openTaskDetail(task) {
   idDiv.textContent = task.id;
   content.appendChild(idDiv);
 
+  // Jira action buttons row
+  var jiraRow = document.createElement('div');
+  jiraRow.style.cssText = 'padding:0 12px 8px;display:flex;align-items:center;gap:8px;';
+  var hasJira = !!(task.jiraId);
+
+  var jiraBtn = document.createElement('button');
+  jiraBtn.className = 'action-btn';
+  jiraBtn.style.cssText = 'font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;';
+  jiraBtn.textContent = hasJira ? 'Update ' + task.jiraId : 'Create Jira';
+  jiraRow.appendChild(jiraBtn);
+
+  if (hasJira) {
+    var openBtn = document.createElement('a');
+    openBtn.href = 'https://' + JIRA_DOMAIN + '/browse/' + task.jiraId;
+    openBtn.target = '_blank';
+    openBtn.className = 'action-btn';
+    openBtn.style.cssText = 'font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;text-decoration:none;';
+    openBtn.textContent = 'Open ' + task.jiraId;
+    jiraRow.appendChild(openBtn);
+  }
+
+  jiraBtn.addEventListener('click', function() {
+    jiraBtn.disabled = true;
+    var msgEl = document.getElementById('task-detail-message');
+    var taskData = state._editingTask;
+
+    if (taskData.jiraId) {
+      // Update existing
+      jiraBtn.textContent = 'Updating...';
+      updateJiraIssue(taskData.jiraId, taskData, function(success, err) {
+        jiraBtn.disabled = false;
+        jiraBtn.textContent = 'Update ' + taskData.jiraId;
+        if (success) {
+          msgEl.textContent = taskData.jiraId + ' updated.';
+          msgEl.className = 'settings-message success';
+        } else {
+          msgEl.textContent = err || 'Jira update failed';
+          msgEl.className = 'settings-message error';
+        }
+        msgEl.style.display = 'block';
+      });
+    } else {
+      // Create new
+      jiraBtn.textContent = 'Creating...';
+      createJiraIssue(taskData, function(result, err) {
+        jiraBtn.disabled = false;
+        if (result) {
+          taskData.jiraId = result.key;
+          state._editingTask.jiraId = result.key;
+          // Save jiraId to Firestore
+          firestoreClient.updateTask(taskData.id, { jiraId: result.key }, function() {});
+          // Update cached tasks
+          if (state.cachedTasks) {
+            state.cachedTasks = state.cachedTasks.map(function(t) {
+              if (t.id === taskData.id) { t.jiraId = result.key; }
+              return t;
+            });
+          }
+          jiraBtn.textContent = 'Update ' + result.key;
+          // Add Open button
+          var newOpenBtn = document.createElement('a');
+          newOpenBtn.href = 'https://' + JIRA_DOMAIN + '/browse/' + result.key;
+          newOpenBtn.target = '_blank';
+          newOpenBtn.className = 'action-btn';
+          newOpenBtn.style.cssText = 'font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;text-decoration:none;';
+          newOpenBtn.textContent = 'Open ' + result.key;
+          jiraRow.appendChild(newOpenBtn);
+          msgEl.textContent = 'Created ' + result.key;
+          msgEl.className = 'settings-message success';
+        } else {
+          jiraBtn.textContent = 'Create Jira';
+          msgEl.textContent = err || 'Jira create failed';
+          msgEl.className = 'settings-message error';
+        }
+        msgEl.style.display = 'block';
+      });
+    }
+  });
+  content.appendChild(jiraRow);
+
   // Editable fields
   TASK_FIELDS.forEach(function(field) {
     var fieldDiv = document.createElement('div');
@@ -1628,18 +1581,17 @@ function saveTaskDetail() {
   var msgEl = document.getElementById('task-detail-message');
   msgEl.style.display = 'none';
 
-  var payload = { action: 'update_task', taskId: state._editingTask.id };
+  var updates = {};
   TASK_FIELDS.forEach(function(f) {
-    payload[f.key] = state._editingTask[f.key] || '';
+    updates[f.key] = state._editingTask[f.key] || '';
   });
 
-  apiPost(state.webAppUrl, payload, function(response) {
-    if (response && response.ok && response.data && response.data.success) {
+  firestoreClient.updateTask(state._editingTask.id, updates, function(success, err) {
+    if (success) {
       msgEl.textContent = 'Saved.';
       msgEl.className = 'settings-message success';
       msgEl.style.display = 'block';
       state._taskDirty = false;
-      // Update cached tasks
       if (state.cachedTasks) {
         state.cachedTasks = state.cachedTasks.map(function(t) {
           if (t.id === state._editingTask.id) return Object.assign({}, t, state._editingTask);
@@ -1647,8 +1599,7 @@ function saveTaskDetail() {
         });
       }
     } else {
-      var err = (response && response.data && response.data.error) || 'Save failed';
-      msgEl.textContent = err;
+      msgEl.textContent = err || 'Save failed';
       msgEl.className = 'settings-message error';
       msgEl.style.display = 'block';
     }
@@ -1667,336 +1618,6 @@ function backToTaskList() {
 }
 
 // ============================================================
-// Bugs view
-// ============================================================
-
-var BUG_FIELDS = [
-  { key: 'steps_to_reproduce', label: 'Steps to Reproduce' },
-  { key: 'expected', label: 'Expected' },
-  { key: 'actual', label: 'Actual' },
-  { key: 'notes', label: 'Notes' },
-  { key: 'status', label: 'Status', type: 'select', options: ['To Do', 'Ready', 'Working', 'Review', 'Done'] },
-  { key: 'environment', label: 'Environment' },
-  { key: 'reporter', label: 'Reporter' },
-  { key: 'additional_notes', label: 'Additional Notes' },
-];
-
-function fetchBugs() {
-  if (!state.webAppUrl) return;
-
-  if (state.cachedBugs) {
-    renderBugList(state.cachedBugs);
-  } else {
-    document.getElementById('bugs-loading').style.display = 'block';
-    document.getElementById('bug-list').innerHTML = '';
-    document.getElementById('bugs-empty').style.display = 'none';
-  }
-
-  apiGet(state.webAppUrl + '?action=list_bugs', function(response) {
-    document.getElementById('bugs-loading').style.display = 'none';
-    if (state.activeView !== 'bugs') return;
-    if (document.getElementById('bug-detail').style.display !== 'none') return;
-    if (!response || !response.ok || !response.data || response.data.error) {
-      if (state.cachedBugs) return;
-      return;
-    }
-    var bugs = response.data.bugs || [];
-    state.cachedBugs = bugs;
-    if (!bugs.length) {
-      document.getElementById('bug-list').innerHTML = '';
-      document.getElementById('bugs-empty').style.display = 'block';
-      return;
-    }
-    document.getElementById('bugs-empty').style.display = 'none';
-    renderBugList(bugs);
-  });
-}
-
-function renderBugList(bugs) {
-  var container = document.getElementById('bug-list');
-  container.innerHTML = '';
-  document.getElementById('bug-detail').style.display = 'none';
-  document.getElementById('view-tabs').style.display = '';
-
-  bugs = bugs.slice().sort(function(a, b) {
-    var na = parseInt((a.id || '').replace(/\D/g, '')) || 0;
-    var nb = parseInt((b.id || '').replace(/\D/g, '')) || 0;
-    return na - nb;
-  });
-
-  bugs.forEach(function(bug) {
-    var div = document.createElement('div');
-    div.className = 'bug-item';
-
-    var id = document.createElement('span');
-    id.className = 'bug-id';
-    id.textContent = bug.id;
-
-    var name = document.createElement('span');
-    name.className = 'bug-summary';
-    name.textContent = bug.name || bug.steps_to_reproduce ? (bug.name || bug.steps_to_reproduce.split('\n')[0]) : '(no description)';
-
-    var status = document.createElement('span');
-    var statusKey = (bug.status || '').toLowerCase().replace(/\s+/g, '');
-    status.className = 'task-status task-status-' + statusKey;
-    status.textContent = bug.status || '';
-
-    div.appendChild(id);
-    div.appendChild(name);
-    div.appendChild(status);
-
-    div.addEventListener('click', (function(b) {
-      return function() { openBugDetail(b); };
-    })(bug));
-
-    container.appendChild(div);
-  });
-
-  // Re-apply filter
-  var filter = document.getElementById('bug-filter-input').value.trim().toUpperCase();
-  if (filter) {
-    container.querySelectorAll('.bug-item').forEach(function(item) {
-      var idEl = item.querySelector('.bug-id');
-      var bugId = idEl ? idEl.textContent.toUpperCase() : '';
-      item.style.display = bugId.indexOf(filter) === 0 ? '' : 'none';
-    });
-  }
-}
-
-function openBugDetail(bug) {
-  state._editingBug = JSON.parse(JSON.stringify(bug));
-  state._bugDirty = false;
-  state._bugIsNew = false;
-
-  document.getElementById('bug-list').style.display = 'none';
-  document.getElementById('bugs-loading').style.display = 'none';
-  document.getElementById('bugs-empty').style.display = 'none';
-  document.getElementById('bug-actions').style.display = 'none';
-  document.getElementById('view-tabs').style.display = 'none';
-  document.getElementById('bug-detail-message').style.display = 'none';
-
-  var detail = document.getElementById('bug-detail');
-  detail.style.display = 'block';
-
-  var content = document.getElementById('bug-detail-content');
-  content.innerHTML = '';
-
-  var idDiv = document.createElement('div');
-  idDiv.className = 'task-detail-id';
-  idDiv.style.color = '#c5221f';
-  idDiv.textContent = bug.id;
-  content.appendChild(idDiv);
-
-  if (bug.name) {
-    var nameDiv = document.createElement('div');
-    nameDiv.style.cssText = 'padding:0 12px 8px;font-size:14px;color:#202124;';
-    nameDiv.textContent = bug.name;
-    content.appendChild(nameDiv);
-  }
-
-  BUG_FIELDS.forEach(function(field) {
-    var fieldDiv = document.createElement('div');
-    fieldDiv.className = 'task-detail-field';
-
-    var label = document.createElement('div');
-    label.className = 'task-detail-label';
-    label.textContent = field.label;
-    fieldDiv.appendChild(label);
-
-    if (field.type === 'select') {
-      var select = document.createElement('select');
-      select.className = 'task-detail-textarea';
-      select.style.resize = 'none';
-      field.options.forEach(function(opt) {
-        var option = document.createElement('option');
-        option.value = opt;
-        option.textContent = opt;
-        if (opt === (bug[field.key] || '')) option.selected = true;
-        select.appendChild(option);
-      });
-      select.addEventListener('change', function() {
-        state._editingBug[field.key] = select.value;
-        state._bugDirty = true;
-        saveBugDetail();
-      });
-      fieldDiv.appendChild(select);
-      content.appendChild(fieldDiv);
-      return;
-    }
-
-    var value = document.createElement('div');
-    value.className = 'task-detail-value';
-    value.textContent = bug[field.key] || '';
-    fieldDiv.appendChild(value);
-
-    value.addEventListener('click', (function(f, valEl, fieldContainer) {
-      return function() {
-        if (fieldContainer.querySelector('.task-detail-textarea')) return;
-        var textarea = document.createElement('textarea');
-        textarea.className = 'task-detail-textarea';
-        textarea.value = state._editingBug[f.key] || '';
-        textarea.rows = Math.max(2, (textarea.value.split('\n').length) + 1);
-        valEl.style.display = 'none';
-        fieldContainer.appendChild(textarea);
-
-        var btnRow = document.createElement('div');
-        btnRow.className = 'task-detail-edit-actions';
-        var saveBtn = document.createElement('button');
-        saveBtn.className = 'op-edit-done';
-        saveBtn.textContent = 'Save';
-        saveBtn.addEventListener('click', function() {
-          state._editingBug[f.key] = textarea.value;
-          valEl.textContent = textarea.value;
-          valEl.style.display = '';
-          textarea.remove();
-          btnRow.remove();
-          state._bugDirty = true;
-          saveBugDetail();
-        });
-        var cancelBtn = document.createElement('button');
-        cancelBtn.className = 'op-edit-cancel';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.addEventListener('click', function() {
-          valEl.style.display = '';
-          textarea.remove();
-          btnRow.remove();
-        });
-        btnRow.appendChild(saveBtn);
-        btnRow.appendChild(cancelBtn);
-        fieldContainer.appendChild(btnRow);
-        textarea.focus();
-      };
-    })(field, value, fieldDiv));
-
-    content.appendChild(fieldDiv);
-  });
-
-  document.getElementById('btn-bug-save').style.display = 'none';
-  document.getElementById('btn-bug-delete').style.display = '';
-}
-
-function createNewBug() {
-  var newBug = {
-    id: '(new)',
-    steps_to_reproduce: '',
-    expected: '',
-    actual: '',
-    environment: '',
-    reporter: '',
-    notes: '',
-    dev_notes: '',
-  };
-  openBugDetail(newBug);
-  // Override flags after openBugDetail resets them
-  state._bugIsNew = true;
-  state._bugDirty = true;
-  document.getElementById('btn-bug-save').style.display = '';
-  document.getElementById('btn-bug-delete').style.display = 'none';
-}
-
-function saveBugDetail() {
-  if (!state._editingBug || !state._bugDirty) return;
-  var btn = document.getElementById('btn-bug-save');
-  var msgEl = document.getElementById('bug-detail-message');
-  msgEl.style.display = 'none';
-
-  if (state._bugIsNew) {
-    var payload = { action: 'create_bug' };
-    BUG_FIELDS.forEach(function(f) { payload[f.key] = state._editingBug[f.key] || ''; });
-
-    apiPost(state.webAppUrl, payload, function(response) {
-      btn.disabled = false;
-      btn.textContent = 'Save';
-      if (response && response.ok && response.data && response.data.success) {
-        state._editingBug.id = response.data.bugId;
-        if (response.data.name) state._editingBug.name = response.data.name;
-        state._bugIsNew = false;
-        state._bugDirty = false;
-        btn.style.display = 'none';
-        document.getElementById('btn-bug-delete').style.display = '';
-        // Update header and name field
-        var idDiv = document.querySelector('#bug-detail-content .task-detail-id');
-        if (idDiv) idDiv.textContent = response.data.bugId;
-        if (response.data.name) {
-          // Add name below ID if not already there
-          var idEl = document.querySelector('#bug-detail-content .task-detail-id');
-          if (idEl && !idEl.nextElementSibling.classList.contains('bug-name-display')) {
-            var nameDiv = document.createElement('div');
-            nameDiv.className = 'bug-name-display';
-            nameDiv.style.cssText = 'padding:0 12px 8px;font-size:14px;color:#202124;';
-            nameDiv.textContent = response.data.name;
-            idEl.after(nameDiv);
-          }
-        }
-        msgEl.textContent = 'Bug created: ' + response.data.bugId;
-        msgEl.className = 'settings-message success';
-        msgEl.style.display = 'block';
-        state.cachedBugs = null;
-      } else {
-        var err = (response && response.data && response.data.error) || 'Create failed';
-        msgEl.textContent = err;
-        msgEl.className = 'settings-message error';
-        msgEl.style.display = 'block';
-      }
-    });
-  } else {
-    var payload = { action: 'update_bug', bugId: state._editingBug.id };
-    BUG_FIELDS.forEach(function(f) { payload[f.key] = state._editingBug[f.key] || ''; });
-
-    apiPost(state.webAppUrl, payload, function(response) {
-      btn.disabled = false;
-      btn.textContent = 'Save';
-      if (response && response.ok && response.data && response.data.success) {
-        state._bugDirty = false;
-        btn.style.display = 'none';
-        msgEl.textContent = 'Bug saved.';
-        msgEl.className = 'settings-message success';
-        msgEl.style.display = 'block';
-        if (state.cachedBugs) {
-          state.cachedBugs = state.cachedBugs.map(function(b) {
-            if (b.id === state._editingBug.id) return Object.assign({}, b, state._editingBug);
-            return b;
-          });
-        }
-      } else {
-        var err = (response && response.data && response.data.error) || 'Save failed';
-        msgEl.textContent = err;
-        msgEl.className = 'settings-message error';
-        msgEl.style.display = 'block';
-      }
-    });
-  }
-}
-
-function deleteBugDetail() {
-  if (!state._editingBug || state._bugIsNew) return;
-  if (!confirm('Delete bug ' + state._editingBug.id + '?')) return;
-
-  var btn = document.getElementById('btn-bug-delete');
-  btn.disabled = true;
-  btn.textContent = 'Deleting...';
-
-  apiPost(state.webAppUrl, { action: 'delete_bug', bugId: state._editingBug.id }, function(response) {
-    btn.disabled = false;
-    btn.textContent = 'Delete';
-    if (response && response.ok && response.data && response.data.success) {
-      state.cachedBugs = null;
-      backToBugList();
-    }
-  });
-}
-
-function backToBugList() {
-  document.getElementById('bug-detail').style.display = 'none';
-  document.getElementById('bug-list').style.display = '';
-  document.getElementById('bug-actions').style.display = '';
-  document.getElementById('view-tabs').style.display = '';
-  state._editingBug = null;
-  state._bugDirty = false;
-  fetchBugs();
-}
-
-// ============================================================
 // Docs view
 // ============================================================
 
@@ -2005,11 +1626,9 @@ function fetchFeatureDocs() {
 
   // Determine drive(s) from config
   if (!state._docsConfig) {
-    apiPost(state.webAppUrl, { action: 'get_config' }, function(response) {
-      if (response && response.ok && response.data) {
-        state._docsConfig = response.data;
-        _renderDocsWithConfig();
-      }
+    firestoreClient.getConfig(function(config) {
+      state._docsConfig = config;
+      _renderDocsWithConfig();
     });
   } else {
     _renderDocsWithConfig();
@@ -2067,19 +1686,21 @@ function _loadDocList(driveId) {
     document.getElementById('docs-list').innerHTML = '';
   }
 
-  // Fetch fresh in background
-  apiGet(state.webAppUrl + '?action=list_feature_docs&driveId=' + encodeURIComponent(driveId), function(response) {
+  // Fetch fresh in background via Google API directly
+  googleApi.listFeatureDocs(driveId, function(docs, err) {
     document.getElementById('docs-loading').style.display = 'none';
     if (state.activeView !== 'docs') return;
     if (document.getElementById('doc-detail').style.display !== 'none') return;
-    if (!response || !response.ok || !response.data) {
-      if (state._featureDocs) return; // keep cached on error
+    if (err) {
+      if (state._featureDocs) return;
+      document.getElementById('docs-empty').textContent = 'Error: ' + err;
+      document.getElementById('docs-empty').style.display = 'block';
       return;
     }
-    var docs = response.data.docs || [];
     state._featureDocs = docs;
     if (!docs.length) {
       document.getElementById('docs-list').innerHTML = '';
+      document.getElementById('docs-empty').textContent = 'No feature documents found';
       document.getElementById('docs-empty').style.display = 'block';
       return;
     }
@@ -2111,28 +1732,6 @@ function _renderDocList(docs) {
 
     div.appendChild(id);
     div.appendChild(name);
-
-    var deleteBtn = document.createElement('button');
-    deleteBtn.className = 'patch-index-delete';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', (function(d, itemEl) {
-      return function(e) {
-        e.stopPropagation();
-        if (!confirm('Delete feature document "' + d.fileName + '"?')) return;
-        deleteBtn.disabled = true;
-        deleteBtn.textContent = 'Deleting...';
-        apiPost(state.webAppUrl, { action: 'delete_feature_doc', fileId: d.fileId, fileName: d.fileName }, function(response) {
-          if (response && response.ok && response.data && response.data.success) {
-            itemEl.remove();
-            state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== d.fileId; });
-          } else {
-            deleteBtn.disabled = false;
-            deleteBtn.textContent = 'Delete';
-          }
-        });
-      };
-    })(doc, div));
-    div.appendChild(deleteBtn);
 
     div.addEventListener('click', (function(d) {
       return function() { openDocDetail(d); };
@@ -2178,21 +1777,15 @@ function showNewDocForm() {
     createBtn.disabled = true;
     createBtn.textContent = 'Creating...';
 
-    apiPost(state.webAppUrl, {
-      action: 'create_feature_doc',
-      driveId: state._selectedDriveId,
-      featureId: featureId,
-      featureName: featureName,
-    }, function(response) {
-      if (response && response.ok && response.data && response.data.success) {
+    googleApi.createFeatureDoc(state._selectedDriveId, featureId, featureName, function(doc, err) {
+      if (doc) {
         form.remove();
-        state._featureDocs = null; // invalidate cache so list refreshes on back
-        openDocDetail(response.data.doc);
+        state._featureDocs = null;
+        openDocDetail(doc);
       } else {
         createBtn.disabled = false;
         createBtn.textContent = 'Create';
-        var err = (response && response.data && response.data.error) || 'Create failed';
-        alert(err);
+        alert(err || 'Create failed');
       }
     });
   });
@@ -2212,7 +1805,46 @@ function openDocDetail(doc) {
   var header = document.getElementById('doc-detail-header');
   var docUrl = 'https://docs.google.com/document/d/' + doc.fileId + '/edit';
   header.innerHTML = '<div class="doc-detail-title">' + escapeHtml(doc.fileName || doc.featureId) + '</div>'
-    + '<div style="padding:0 12px 8px;"><a href="' + docUrl + '" target="_blank" class="feature-doc-link" style="font-size:12px;">Open in Google Docs</a></div>';
+    + '<div style="padding:0 12px;display:flex;align-items:center;gap:8px;">'
+    + '<a href="' + docUrl + '" target="_blank" class="action-btn" id="btn-open-doc" style="font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;text-decoration:none;">Open</a>'
+    + '<button class="action-btn" id="btn-archive-doc" style="font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;">Archive</button>'
+    + '<button class="action-btn" id="btn-delete-doc" style="font-size:11px;padding:4px 10px;background:#fce8e6;color:#c5221f;border:1px solid #f5c6cb;">Delete</button>'
+    + '</div>';
+
+  document.getElementById('btn-archive-doc').addEventListener('click', function() {
+    if (!confirm('Archive "' + doc.fileName + '"? It will be moved to the Archive folder.')) return;
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Archiving...';
+    var driveId = state._selectedDriveId || '';
+    googleApi.archiveFeatureDoc(doc.fileId, driveId, function(success) {
+      if (success) {
+        state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== doc.fileId; });
+        backToDocList();
+        _renderDocList(state._featureDocs);
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Archive';
+      }
+    });
+  });
+
+  document.getElementById('btn-delete-doc').addEventListener('click', function() {
+    if (!confirm('Delete feature document "' + doc.fileName + '"? This moves it to trash.')) return;
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+    googleApi.deleteFeatureDoc(doc.fileId, function(success) {
+      if (success) {
+        state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== doc.fileId; });
+        backToDocList();
+        _renderDocList(state._featureDocs);
+      } else {
+        btn.disabled = false;
+        btn.textContent = 'Delete';
+      }
+    });
+  });
 
   var storiesContainer = document.getElementById('doc-detail-stories');
   storiesContainer.innerHTML = '<div class="loading">Loading stories...</div>';
@@ -2220,13 +1852,13 @@ function openDocDetail(doc) {
   document.getElementById('btn-add-story').style.display = '';
   document.getElementById('doc-detail-message').style.display = 'none';
 
-  apiGet(state.webAppUrl + '?action=get_feature_doc_stories&docId=' + encodeURIComponent(doc.fileId), function(response) {
+  googleApi.getFeatureDocStories(doc.fileId, function(result, err) {
     storiesContainer.innerHTML = '';
-    if (!response || !response.ok || !response.data) {
-      storiesContainer.innerHTML = '<div style="padding:12px;color:#c5221f;">Failed to load stories</div>';
+    if (err || !result) {
+      storiesContainer.innerHTML = '<div style="padding:12px;color:#c5221f;">Failed to load stories: ' + (err || '') + '</div>';
       return;
     }
-    state._docStories = response.data.stories || [];
+    state._docStories = result.stories || [];
     _renderDocStories(doc.fileId);
   });
 }
@@ -2252,8 +1884,8 @@ function _renderDocStories(docId) {
         if (!confirm('Delete story ' + s.storyId + '?')) return;
         deleteBtn.disabled = true;
         deleteBtn.textContent = 'Deleting...';
-        apiPost(state.webAppUrl, { action: 'delete_story', docId: docId, storyId: s.storyId }, function(resp) {
-          if (resp && resp.ok && resp.data && resp.data.success) {
+        googleApi.applyStoryDelete(docId, s.storyId, null, true, function(success) {
+          if (success) {
             cardEl.remove();
             state._docStories = state._docStories.filter(function(st) { return st.storyId !== s.storyId; });
           } else {
@@ -2291,13 +1923,8 @@ function _renderDocStories(docId) {
           var newText = textarea.value;
           saveBtn.disabled = true;
           saveBtn.textContent = 'Saving...';
-          apiPost(state.webAppUrl, {
-            action: 'update_story',
-            docId: docId,
-            storyId: s.storyId,
-            proposedText: newText,
-          }, function(resp) {
-            if (resp && resp.ok && resp.data && resp.data.success) {
+          googleApi.applyStoryUpdate(docId, s.storyId, newText, null, true, function(success, err) {
+            if (success) {
               s.text = newText;
               bodyEl.textContent = newText;
               bodyEl.style.display = '';
@@ -2306,9 +1933,8 @@ function _renderDocStories(docId) {
             } else {
               saveBtn.disabled = false;
               saveBtn.textContent = 'Save';
-              var err = (resp && resp.data && resp.data.error) || 'Save failed';
               var msgEl = document.getElementById('doc-detail-message');
-              msgEl.textContent = err;
+              msgEl.textContent = err || 'Save failed';
               msgEl.className = 'settings-message error';
               msgEl.style.display = 'block';
             }
@@ -2355,21 +1981,15 @@ function addNewStory() {
   btn.disabled = true;
   btn.textContent = 'Adding...';
 
-  apiPost(state.webAppUrl, {
-    action: 'create_story',
-    docId: docId,
-    storyId: newStoryId,
-    proposedText: newText,
-  }, function(resp) {
+  googleApi.applyStoryCreate(docId, newText, newStoryId, true, function(success, err) {
     btn.disabled = false;
     btn.textContent = 'Add User Story';
-    if (resp && resp.ok && resp.data && resp.data.success) {
+    if (success) {
       state._docStories.push({ storyId: newStoryId, storyTitle: '', text: newText });
       _renderDocStories(docId);
     } else {
-      var err = (resp && resp.data && resp.data.error) || 'Failed to add story';
       var msgEl = document.getElementById('doc-detail-message');
-      msgEl.textContent = err;
+      msgEl.textContent = err || 'Failed to add story';
       msgEl.className = 'settings-message error';
       msgEl.style.display = 'block';
     }
@@ -2384,6 +2004,231 @@ function backToDocList() {
   state._currentDoc = null;
   state._docStories = null;
   if (state._selectedDriveId) _loadDocList(state._selectedDriveId);
+}
+
+// ============================================================
+// Google Picker integration
+// ============================================================
+
+function _openFeatureDocPicker(callback) {
+  var overlay = document.getElementById('file-browser-overlay');
+  overlay.style.display = 'block';
+  var searchInput = document.getElementById('file-browser-search');
+  searchInput.style.display = 'none';
+  var statusEl = document.getElementById('file-browser-status');
+  var resultsEl = document.getElementById('file-browser-results');
+  resultsEl.innerHTML = '';
+
+  var docs = state._featureDocs || [];
+  if (!docs.length) {
+    statusEl.textContent = 'No feature documents loaded. Open the Docs tab first.';
+    return;
+  }
+
+  statusEl.textContent = docs.length + ' feature document(s)';
+  docs.forEach(function(d) {
+    var item = document.createElement('div');
+    item.className = 'file-browser-item';
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'file-browser-name';
+    nameSpan.textContent = d.fileName;
+    item.appendChild(nameSpan);
+    item.addEventListener('click', function() {
+      overlay.style.display = 'none';
+      searchInput.style.display = '';
+      callback(d.fileId, d.fileName);
+    });
+    resultsEl.appendChild(item);
+  });
+
+  // Ensure cancel also restores search input
+  var cancelHandler = function() {
+    searchInput.style.display = '';
+  };
+  document.getElementById('btn-file-browser-cancel').addEventListener('click', cancelHandler, { once: true });
+}
+
+function openPickerAndProcess(pickerType, callback) {
+  state._pickerCallback = callback;
+  state._pickerType = pickerType;
+
+  // Show file browser overlay
+  var overlay = document.getElementById('file-browser-overlay');
+  overlay.style.display = 'block';
+  document.getElementById('file-browser-search').value = '';
+  document.getElementById('file-browser-results').innerHTML = '';
+  document.getElementById('file-browser-status').textContent = 'Type to search Google Drive...';
+  document.getElementById('file-browser-search').focus();
+}
+
+function _searchDriveFiles(query) {
+  var statusEl = document.getElementById('file-browser-status');
+  var resultsEl = document.getElementById('file-browser-results');
+  statusEl.textContent = 'Searching...';
+  resultsEl.innerHTML = '';
+
+  googleApi.searchFiles(query, function(data, err) {
+    if (err) { statusEl.textContent = 'Error: ' + err; return; }
+    var files = (data && data.files) || [];
+        if (!files.length) {
+          statusEl.textContent = 'No documents found';
+          return;
+        }
+        statusEl.textContent = files.length + ' document(s)';
+        files.forEach(function(f) {
+          var item = document.createElement('div');
+          item.className = 'file-browser-item';
+          var nameSpan = document.createElement('span');
+          nameSpan.className = 'file-browser-name';
+          nameSpan.textContent = f.name;
+          var dateSpan = document.createElement('span');
+          dateSpan.className = 'file-browser-date';
+          dateSpan.textContent = new Date(f.modifiedTime).toLocaleDateString();
+          item.appendChild(nameSpan);
+          item.appendChild(dateSpan);
+          item.addEventListener('click', function() {
+            document.getElementById('file-browser-overlay').style.display = 'none';
+            if (state._pickerCallback) {
+              state._pickerCallback(f.id, f.name);
+              state._pickerCallback = null;
+            }
+          });
+          resultsEl.appendChild(item);
+        });
+  });
+}
+
+function _processSummaryWithFile(fileId, fileName) {
+  var debugEl = document.getElementById('debug-output');
+  debugEl.style.display = 'none';
+  var steps = [];
+  var btn = document.getElementById('btn-process-summary');
+  btn.disabled = true;
+
+  function updateDebug(title) {
+    _showDebugCard(debugEl, title, steps);
+  }
+
+  btn.textContent = 'Identifying features...';
+  steps.push('Selected: ' + (fileName || fileId));
+  steps.push('Identifying relevant features...');
+  updateDebug('Processing');
+
+  apiPostWithToken(state.webAppUrl, { action: 'identify_features', fileId: fileId }, function(response) {
+    if (!response || !response.ok || !response.data || !response.data.success) {
+      var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
+      steps.push('ERROR: ' + err);
+      updateDebug('Error');
+      btn.disabled = false;
+      btn.textContent = 'Process Meeting Summary';
+      return;
+    }
+
+    var idData = response.data.data;
+    steps.push('Read summary (' + idData.contentLength + ' chars)');
+    steps.push('Found ' + idData.knownFeatures.length + ' feature doc(s)');
+
+    if (!idData.featureIds.length) {
+      steps.push('Gemini found no relevant features');
+      updateDebug('Processing complete');
+      btn.disabled = false;
+      btn.textContent = 'Process Meeting Summary';
+      return;
+    }
+
+    steps.push('Gemini identified features: ' + idData.featureIds.join(', '));
+    updateDebug('Processing');
+
+    var featureIds = idData.featureIds.slice();
+    var hasPatch = false;
+
+    function processNext() {
+      if (!featureIds.length) {
+        var title = steps.some(function(s) { return s.indexOf('ERROR') >= 0; })
+          ? 'Processing completed with errors' : 'Processing complete';
+        updateDebug(title);
+        btn.disabled = false;
+        btn.textContent = 'Process Meeting Summary';
+        if (hasPatch) setTimeout(function() { fetchAllPatches(); }, 1000);
+        return;
+      }
+
+      var fId = featureIds.shift();
+      btn.textContent = 'Normalizing ' + fId + '...';
+      steps.push(fId + ': Normalizing...');
+      updateDebug('Processing');
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'update_technical_notes', fileId: idData.fileId, featureId: fId,
+      }, function() { /* fire and forget */ });
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'normalize_feature', fileId: idData.fileId, featureId: fId,
+      }, function(normResp) {
+        steps.pop();
+        if (!normResp || !normResp.ok || !normResp.data || !normResp.data.success) {
+          var err = (normResp && normResp.data && normResp.data.error) || 'Unknown error';
+          steps.push(fId + ': ERROR normalizing: ' + err);
+          updateDebug('Processing');
+          processNext();
+          return;
+        }
+
+        var normData = normResp.data.data;
+        btn.textContent = 'Generating patch for ' + fId + '...';
+        steps.push(fId + ': Generating patch plan...');
+        updateDebug('Processing');
+
+        apiPostWithToken(state.webAppUrl, {
+          action: 'generate_patch_plan',
+          fileId: idData.fileId, fileName: idData.fileName, featureId: fId,
+          normalizedDoc: normData.normalizedDoc, comments: normData.comments,
+          docFileId: normData.docFileId, docFileName: normData.docFileName,
+        }, function(patchResp) {
+          steps.pop();
+          if (patchResp && patchResp.ok && patchResp.data && patchResp.data.step) {
+            steps.push(patchResp.data.step);
+            if (patchResp.data.step.indexOf('Created patch') >= 0) hasPatch = true;
+          } else {
+            var err = (patchResp && patchResp.data && patchResp.data.error) || 'Unknown error';
+            steps.push(fId + ': ERROR: ' + err);
+          }
+          updateDebug('Processing');
+          processNext();
+        });
+      });
+    }
+
+    processNext();
+  });
+}
+
+function _processFeatureDocWithFile(fileId, fileName) {
+  var debugEl = document.getElementById('debug-output');
+  debugEl.style.display = 'none';
+  var btn = document.getElementById('btn-process-feature');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  _showDebugCard(debugEl, 'Processing', ['Selected: ' + (fileName || fileId), 'Generating task patches...']);
+
+  apiPostWithToken(state.webAppUrl, { action: 'process_feature_doc', fileId: fileId }, function(response) {
+    btn.disabled = false;
+    btn.textContent = 'Process Feature Document';
+
+    if (!response || !response.ok) {
+      var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
+      _showDebugCard(debugEl, 'Error', ['Selected: ' + (fileName || fileId), err]);
+      return;
+    }
+    var data = response.data || {};
+    if (data.error) {
+      _showDebugCard(debugEl, 'Error', ['Selected: ' + (fileName || fileId), data.error]);
+    } else {
+      _showDebugCard(debugEl, 'Complete', ['Selected: ' + (fileName || fileId), data.message || 'Feature document processed']);
+      setTimeout(function() { fetchAllPatches(); }, 1000);
+    }
+  });
 }
 
 // ============================================================
