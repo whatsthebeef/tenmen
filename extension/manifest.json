@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Tenmen Patch Review",
+  "name": "Tenmen",
   "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwEv5xOeHEQ+dsAv5fMYTaeIpoAxDAGKW39mn6GK8eODxZGvcxw4GZb7NvN+vif9EbjT7GsSGurC0e1T+B4nzz09ksz/5HlbRm4lRXSmpA7MhRw0Xqxvccns3dv8ZAdYWwwdL/cL9L2/bFRHbIV6lilKNZBpOwG9FqF45+46QKt62U1H9Sv7jwtekf3BrdEDS/5ySte7+DWH7j8H5O4O1BGfI8WfiDGYG4RCHoUz7X2HjLlN+Gl8+TQ76QWpSFKUmJwI2gtEzNWBt7tO+jbZ/YZ2o08NJfLeGOb/wqs7HywS87ed7uJqk0ZUPgD7mTqxj4mSfE+HvMmvaj+WMtvL9/wIDAQAB",
   "description": "Review and apply feature document patches from the Tenmen side panel",
   "permissions": [
     "sidePanel",
@@ -18,7 +19,8 @@
     "https://www.googleapis.com/*",
     "https://script.google.com/*",
     "https://*.googleusercontent.com/*",
-    "https://*.atlassian.net/*"
+    "https://*.atlassian.net/*",
+    "https://*.run.app/*"
   ],
   "oauth2": {
     "client_id": "102866742480-sei236di697mjriujr8en7dfqat22o11.apps.googleusercontent.com",

@@ -2,10 +2,13 @@ import {GoogleGenerativeAI} from "@google/generative-ai";
 import {getConfig} from "./firestore.js";
 import {
   getFeatureIdentificationPrompt,
+  getDiscoveryFeatureIdentificationPrompt,
   getNormalizationPrompt,
   getPatchPlanPrompt,
   getTaskProposalPrompt,
   getTechnicalNotesPrompt,
+  getDiscoveryNormalizationPrompt,
+  getDiscoveryPatchPlanPrompt,
 } from "./prompts.js";
 
 let genAI: GoogleGenerativeAI | null = null;
@@ -19,17 +22,20 @@ async function getGenAI(): Promise<GoogleGenerativeAI> {
   return genAI;
 }
 
-async function getModelName(): Promise<string> {
+async function getModelNames(): Promise<{primary: string; fallback: string}> {
   const config = await getConfig();
-  return (config.GEMINI_MODEL as string) || "gemini-3-pro-preview";
+  return {
+    primary: (config.GEMINI_MODEL as string) || "gemini-3-pro-preview",
+    fallback: (config.GEMINI_FALLBACK as string) || "",
+  };
 }
 
-export async function callGemini(
+async function _callWithModel(
+  ai: GoogleGenerativeAI,
+  modelName: string,
   prompt: string,
-  maxTokens = 65536
+  maxTokens: number
 ): Promise<string> {
-  const ai = await getGenAI();
-  const modelName = await getModelName();
   const model = ai.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -37,11 +43,75 @@ export async function callGemini(
       responseMimeType: "application/json",
     },
   });
-
   const result = await model.generateContent(prompt);
-  const response = result.response;
-  const text = response.text();
-  return text;
+  return result.response.text();
+}
+
+function _delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Track retry/fallback activity for the current request
+let _callLog: string[] = [];
+
+export function getCallLog(): string[] {
+  return _callLog;
+}
+
+export function clearCallLog(): void {
+  _callLog = [];
+}
+
+export async function callGemini(
+  prompt: string,
+  maxTokens = 65536
+): Promise<string> {
+  const ai = await getGenAI();
+  const models = await getModelNames();
+  const maxRetries = 3;
+  const baseDelay = 10000; // 10s, 20s, 40s
+
+  // Try primary model with retries
+  _callLog.push(`Calling ${models.primary}...`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await _callWithModel(ai, models.primary, prompt, maxTokens);
+      if (attempt > 1) _callLog.push(`${models.primary} succeeded on attempt ${attempt}`);
+      return result;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isRetryable = msg.includes("503") || msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("overloaded") || msg.includes("unavailable") || msg.includes("Error fetching") || msg.includes("fetch") || msg.includes("ECONNRESET") || msg.includes("socket hang up") || msg.includes("ETIMEDOUT");
+      const shortMsg = msg.substring(0, 80);
+      if (!isRetryable || attempt === maxRetries) {
+        if (!models.fallback) throw e;
+        _callLog.push(`${models.primary} attempt ${attempt}/${maxRetries} failed: ${shortMsg}`);
+        _callLog.push(`Switching to fallback model ${models.fallback}...`);
+        break;
+      }
+      const delaySec = (baseDelay * Math.pow(2, attempt - 1)) / 1000;
+      _callLog.push(`${models.primary} attempt ${attempt}/${maxRetries} failed: ${shortMsg}. Retrying in ${delaySec}s...`);
+      await _delay(delaySec * 1000);
+    }
+  }
+
+  // Try fallback model with retries
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await _callWithModel(ai, models.fallback, prompt, maxTokens);
+      if (attempt > 1) _callLog.push(`${models.fallback} succeeded on attempt ${attempt}`);
+      return result;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isRetryable = msg.includes("503") || msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("overloaded") || msg.includes("unavailable") || msg.includes("Error fetching") || msg.includes("fetch") || msg.includes("ECONNRESET") || msg.includes("socket hang up") || msg.includes("ETIMEDOUT");
+      const shortMsg = msg.substring(0, 80);
+      if (!isRetryable || attempt === maxRetries) throw e;
+      const delaySec = (baseDelay * Math.pow(2, attempt - 1)) / 1000;
+      _callLog.push(`${models.fallback} attempt ${attempt}/${maxRetries} failed: ${shortMsg}. Retrying in ${delaySec}s...`);
+      await _delay(delaySec * 1000);
+    }
+  }
+
+  throw new Error("All Gemini retries exhausted");
 }
 
 export function parseGeminiJson(raw: string): Record<string, unknown> {
@@ -67,6 +137,15 @@ export async function callGeminiForFeatureIdentification(
   const prompt = getFeatureIdentificationPrompt(summaryContent, knownFeatures);
   const raw = await callGemini(prompt, 4096);
   return parseGeminiJson(raw) as {featureIds: string[]};
+}
+
+export async function callGeminiForDiscoveryFeatureIdentification(
+  summaryContent: string,
+  knownFeatures: Array<{id: string; summary: string}>
+): Promise<{existingFeatureIds: string[]; newFeatures: Array<{id: string; name: string}>}> {
+  const prompt = getDiscoveryFeatureIdentificationPrompt(summaryContent, knownFeatures);
+  const raw = await callGemini(prompt, 4096);
+  return parseGeminiJson(raw) as {existingFeatureIds: string[]; newFeatures: Array<{id: string; name: string}>};
 }
 
 export async function callGeminiForNormalization(
@@ -107,11 +186,29 @@ export async function callGeminiForTaskProposal(
 export async function callGeminiForTechnicalNotes(
   summaryContent: string,
   existingNotes: string,
-  featureId: string,
-  currentTasks: Array<Record<string, unknown>>
-): Promise<{sections: Array<Record<string, unknown>>}> {
+  featureId: string
+): Promise<{notes: string[]}> {
 
-  const prompt = getTechnicalNotesPrompt(summaryContent, existingNotes, featureId, currentTasks);
+  const prompt = getTechnicalNotesPrompt(summaryContent, existingNotes, featureId);
   const raw = await callGemini(prompt);
-  return parseGeminiJson(raw) as {sections: Array<Record<string, unknown>>};
+  return parseGeminiJson(raw) as {notes: string[]};
+}
+
+export async function callGeminiForDiscoveryNormalization(
+  structuredText: string,
+  featureId: string
+): Promise<Record<string, unknown>> {
+  const prompt = getDiscoveryNormalizationPrompt(structuredText, featureId);
+  const raw = await callGemini(prompt);
+  return parseGeminiJson(raw);
+}
+
+export async function callGeminiForDiscoveryPatchPlan(
+  normalizedDoc: Record<string, unknown>,
+  meetingSummary: string,
+  featureId: string
+): Promise<{operations: Array<Record<string, unknown>>}> {
+  const prompt = getDiscoveryPatchPlanPrompt(normalizedDoc, meetingSummary, featureId);
+  const raw = await callGemini(prompt);
+  return parseGeminiJson(raw) as {operations: Array<Record<string, unknown>>};
 }

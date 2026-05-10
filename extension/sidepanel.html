@@ -9,7 +9,7 @@
     <button class="view-tab active" data-view="patches">Patches</button>
     <button class="view-tab" data-view="tasks">Tasks</button>
     <button class="view-tab" data-view="docs">Docs</button>
-    <button class="view-tab view-tab-icon" data-view="settings" title="Settings">&#9881;</button>
+    <button class="view-tab view-tab-icon" data-view="settings" title="Settings" style="display:none;">&#9881;</button>
   </nav>
 
   <div class="status-bar" id="status-bar"></div>
@@ -20,21 +20,21 @@
       <button class="patch-back-btn" id="btn-patch-back">&larr; Back to patches</button>
       <button class="patch-index-delete" id="btn-patch-delete" style="float:right;">Delete Patch</button>
     </div>
-    <div class="patch-actions" id="patch-actions">
-      <button class="action-btn" id="btn-process-summary">Process Meeting Summary</button>
-      <button class="action-btn" id="btn-process-feature">Process Feature Document</button>
-      <div class="debug-output" id="debug-output" style="display:none;"></div>
+    <div id="content">
+      <div class="loading" id="loading" style="display:none;">Loading Patches...</div>
+      <div class="patch-list" id="patch-list"></div>
+      <div id="patch-index"></div>
+      <div class="all-done" id="all-done" style="display:none;">No patches available</div>
     </div>
     <div class="section-header" id="source-section" style="display:none;">
       <div class="section-label">Meeting Summary</div>
       <div class="section-link" id="source-header"></div>
     </div>
-
-    <div id="content">
-      <div class="loading" id="loading" style="display:none;">Loading Patches...</div>
-      <div class="patch-list" id="patch-list"></div>
-      <div id="patch-index"></div>
-      <div class="all-done" id="all-done" style="display:none;">All patches reviewed</div>
+    <div class="patch-actions" id="patch-actions">
+      <button class="action-btn" id="btn-process-discovery">Process Discovery Meeting</button>
+      <button class="action-btn" id="btn-process-summary">Process Formulation Meeting</button>
+      <button class="action-btn" id="btn-process-feature">Process Feature Document</button>
+      <div class="debug-output" id="debug-output" style="display:none;"></div>
     </div>
   </div>
 
@@ -67,9 +67,9 @@
     </div>
     <div class="loading" id="docs-loading" style="display:none;">Loading Documents...</div>
     <div id="docs-list"></div>
-    <div class="all-done" id="docs-empty" style="display:none;">No feature documents found</div>
+    <div class="all-done" id="docs-empty" style="display:none;">No documents found</div>
     <div id="docs-actions">
-      <button class="action-btn" id="btn-new-feature-doc">New Feature Document</button>
+      <button class="action-btn" id="btn-new-feature-doc">New Document</button>
     </div>
     <!-- Doc detail view -->
     <div id="doc-detail" style="display:none;">
@@ -97,6 +97,10 @@
       <div class="settings-field">
         <label>Gemini Model</label>
         <input type="text" id="setting-gemini-model" placeholder="gemini-3-pro-preview">
+      </div>
+      <div class="settings-field">
+        <label>Fallback Model</label>
+        <input type="text" id="setting-gemini-fallback" placeholder="gemini-2.5-flash-preview-05-20">
       </div>
       <div class="section-label" style="margin-top:14px;">Jira</div>
       <div class="settings-field">

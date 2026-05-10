@@ -221,32 +221,26 @@ If no known features are discussed, return an empty array.
 Return ONLY valid JSON, no other text.`;
 }
 
-export function getTechnicalNotesPrompt(summaryContent: string, existingNotes: string, featureId: string, currentTasks: Array<Record<string, unknown>>): string {
-  var tasksSummary = formatTasksSummary(currentTasks);
-
+export function getTechnicalNotesPrompt(summaryContent: string, existingNotes: string, featureId: string): string {
   return `You are a software engineering assistant. Extract all TECHNICAL content from this meeting summary that is relevant to Feature ${featureId}.
 
 Feature ID: ${featureId}
-
-Known tasks for this feature:
-${tasksSummary}
 
 Meeting summary:
 ---
 ${summaryContent}
 ---
 
-Existing technical notes (to be updated/appended to, not replaced):
+Existing technical notes (merge new content into these, do not remove existing notes unless explicitly contradicted):
 ---
 ${existingNotes || '(none)'}
 ---
 
-Extract ONLY technically focused content from the meeting — things useful for developers but NOT for a product owner. This includes:
+Extract ONLY technically focused content — things useful for developers. This includes:
 - Software design discussions and architecture decisions
 - Refactoring plans
 - Code-level discussions (patterns, libraries, APIs)
 - Environment setup and configuration
-- Service configurations and communications setup
 - Infrastructure and deployment notes
 - Database schema discussions
 - Performance considerations
@@ -254,33 +248,22 @@ Extract ONLY technically focused content from the meeting — things useful for 
 - Third-party integration technical details
 
 Do NOT include:
-- User stories or acceptance criteria (those go in the feature document)
-- Product requirements or business logic descriptions
+- User stories or acceptance criteria
+- Product requirements or business logic
 - UX/UI decisions from the product perspective
 
-Organize the notes as follows:
-- If the technical content relates to a specific known task, group it under that task ID and summary
-- If no specific task can be identified, put it under "General"
-- For existing notes, ADD new content and UPDATE existing sections where the meeting provided new information. Do not remove existing notes unless they are explicitly contradicted.
-- IMPORTANT: Review all existing notes currently in the "General" section. If any of them can now be matched to a specific known task (based on the task list provided above), move them out of General and into the appropriate task section. This keeps the document organized and makes the notes more useful. Only leave notes in General if they truly cannot be attributed to any specific task.
+Return a flat list of technical notes as bullet points. Merge with existing notes — add new items, update existing items where the meeting provided new information, keep existing items that are still relevant.
 
 Return your response as JSON:
 {
-  "sections": [
-    {
-      "taskId": "${featureId}T1",
-      "taskSummary": "Developer wants to implement auth service",
-      "notes": ["Use OAuth2 with PKCE flow", "Consider Redis for session storage", "Existing auth middleware needs refactoring to support SSO"]
-    },
-    {
-      "taskId": null,
-      "taskSummary": "General",
-      "notes": ["Migrate to Node 20 before starting feature work", "Set up staging environment with Docker Compose"]
-    }
+  "notes": [
+    "Use OAuth2 with PKCE flow for authentication",
+    "Consider Redis for session storage",
+    "Migrate to Node 20 before starting feature work"
   ]
 }
 
-If there is no technical content relevant to this feature, return: { "sections": [] }
+If there is no technical content relevant to this feature, return: { "notes": [] }
 
 Return ONLY valid JSON, no other text.`;
 }
@@ -470,6 +453,7 @@ export function getPatchPlanPrompt(normalizedDoc: Record<string, unknown>, meeti
     '\n}' +
     '\n' +
     '\nRULES:' +
+    '\n- CRITICAL: Only modify User Stories. Do NOT touch the Executive Summary, Objectives, High Level Requirements, Open Questions, or any other discovery sections. Those are managed separately.' +
     '\n- CRITICAL: For unchanged text, copy it CHARACTER FOR CHARACTER from the document. Do NOT change ANY words, even if you think a synonym is better. Do NOT change "visible" to "available", "must" to "should", "button" to "action", or any other synonym substitution. If the original says "Card details must not be visible" then the proposed text MUST say exactly "Card details must not be visible" — not "Card details must not be available" or any variation. The ONLY changes allowed are those directly warranted by the meeting summary.' +
     '\n- Only include operations for stories that are actually affected by the meeting summary.' +
     '\n- Do NOT include unchanged stories.' +
@@ -485,6 +469,125 @@ export function getPatchPlanPrompt(normalizedDoc: Record<string, unknown>, meeti
     '\n' +
     '\n' +
     '\nReturn ONLY valid JSON, no other text.';
+}
+
+export function getDiscoveryFeatureIdentificationPrompt(summaryContent: string, knownFeatures: Array<{id: string; summary: string}>): string {
+  const featureList = knownFeatures.length
+    ? knownFeatures.map(e => '- Feature ' + e.id + ': ' + e.summary).join('\n')
+    : '(none)';
+
+  return `You are a project management assistant. A discovery meeting summary has been provided. Identify which of the EXISTING features are discussed.
+
+IMPORTANT: You can ONLY select from the known features listed below. Do NOT suggest or create new features. If the meeting discusses a topic not covered by any existing feature, ignore it.
+
+Discovery meetings typically focus on 1-2 features. Include a feature if the meeting covered topics, objectives, requirements, or questions relevant to that feature's scope. Be generous with matching — if a topic area relates to an existing feature, include it.
+
+Known features (existing documents):
+${featureList}
+
+Meeting summary:
+---
+${summaryContent}
+---
+
+Return the list of feature IDs from the known list that have relevant discussion in this meeting summary.
+
+Return your response as JSON with this exact structure:
+{
+  "existingFeatureIds": ["F1", "F3"],
+  "newFeatures": []
+}
+
+- "existingFeatureIds": feature IDs from the known list that are discussed
+- "newFeatures": ALWAYS an empty array — do not create new features
+- If no known features are discussed, return an empty array for "existingFeatureIds"
+
+Return ONLY valid JSON, no other text.`;
+}
+
+// ============================================================
+// Discovery document prompts
+// ============================================================
+
+export function getDiscoveryNormalizationPrompt(structuredDoc: string, featureId: string): string {
+  return 'You are a document structure analyzer. Given the structural extraction of a discovery document, normalize it into a clean intermediate representation.\n' +
+    '\nFeature ID: ' + featureId +
+    '\n\nDOCUMENT STRUCTURE:\nEach line shows [type] text {idx:startIndex-endIndex}\n---\n' +
+    structuredDoc +
+    '\n---' +
+    '\n\nThe discovery document has these standard sections (H2 headings):' +
+    '\n- Executive Summary (free-form paragraphs)' +
+    '\n- Objectives (numbered list)' +
+    '\n- High Level Requirements (numbered list)' +
+    '\n- Open Questions (checkbox list)' +
+    '\n\nNormalize this into the following JSON structure:' +
+    '\n{' +
+    '\n  "title": "document title",' +
+    '\n  "sections": [' +
+    '\n    {' +
+    '\n      "sectionId": "Executive Summary",' +
+    '\n      "content": "full text of the section including heading",' +
+    '\n      "startIndex": 0,' +
+    '\n      "endIndex": 100' +
+    '\n    }' +
+    '\n  ]' +
+    '\n}' +
+    '\n\nRULES:' +
+    '\n- Preserve the startIndex and endIndex from the source structure' +
+    '\n- Include ALL content for each section' +
+    '\n- The sectionId MUST match the H2 heading text exactly' +
+    '\n- If additional sections exist beyond the standard four, include them' +
+    '\n\nReturn ONLY valid JSON, no other text.';
+}
+
+export function getDiscoveryPatchPlanPrompt(normalizedDoc: Record<string, unknown>, meetingSummary: string, featureId: string): string {
+  return 'You are a document patch planner. Given a discovery document and a meeting summary, generate a patch plan with section-level operations.\n' +
+    '\nFeature ID: ' + featureId +
+    '\n\nCURRENT DOCUMENT:\n---\n' + JSON.stringify(normalizedDoc, null, 2) + '\n---' +
+    '\n\nMEETING SUMMARY:\n---\n' + meetingSummary + '\n---' +
+    '\n\nIMPORTANT: Only extract changes relevant to Feature ' + featureId + '.' +
+    '\n\nThe discovery document has these standard sections (H2 headings):' +
+    '\n- Executive Summary — free-form paragraphs describing the feature' +
+    '\n- Objectives — numbered list of objectives (1. 2. 3. etc.)' +
+    '\n- High Level Requirements — numbered list of high-level requirements' +
+    '\n- Open Questions — checkbox list of unresolved questions' +
+    '\n\nEach operation targets ONE section. There are three operation types:' +
+    '\n1. "update" — Modify an existing section. Provide the COMPLETE updated section text including the heading.' +
+    '\n2. "create" — Add a new section. Provide the full section text including the heading.' +
+    '\n3. "delete" — Remove a section entirely.' +
+    '\n\nField notes:' +
+    '\n- "storyId" is the EXACT section heading text (e.g. "Executive Summary", "Objectives")' +
+    '\n- "storyTitle" is the same as storyId for discovery sections' +
+    '\n- "proposedText" must be PLAIN TEXT as it should appear in the document' +
+    '\n- The FIRST LINE of proposedText must be the section heading (e.g. "Executive Summary")' +
+    '\n- For numbered lists (Objectives, Open Questions, High Level Requirements), use "1. ", "2. ", etc.' +
+    '\n- Do NOT include "currentText" — the system reads it from the document.' +
+    '\n\nExample proposedText for a list section (single \\n between lines):' +
+    '\n"Objectives\\n1. Enable teachers to review AI-generated feedback before sharing\\n2. Provide configurable analysis parameters\\n3. Support multiple data collection types"' +
+    '\n\nExample proposedText for Executive Summary:' +
+    '\n"Executive Summary\\nAI Data Analysis introduces a teacher-facing tool that analyzes student-collected sensor data. The feature enables teachers to evaluate how well students\' recorded trials align with lesson objectives."' +
+    '\n\nReturn JSON:' +
+    '\n{' +
+    '\n  "operations": [' +
+    '\n    {' +
+    '\n      "type": "update",' +
+    '\n      "storyId": "Objectives",' +
+    '\n      "storyTitle": "Objectives",' +
+    '\n      "proposedText": "Objectives\\n1. First objective\\n2. Second objective",' +
+    '\n      "reason": "Added objective for data export per meeting discussion",' +
+    '\n      "source": "Meeting section on data handling"' +
+    '\n    }' +
+    '\n  ]' +
+    '\n}' +
+    '\n\nRULES:' +
+    '\n- CRITICAL: For unchanged text, copy it CHARACTER FOR CHARACTER from the document.' +
+    '\n- Only include operations for sections actually affected by the meeting summary.' +
+    '\n- Do NOT include unchanged sections.' +
+    '\n- CRITICAL: Do NOT touch the "User Stories" or "Technical Notes" sections. Only modify discovery sections: Executive Summary, Objectives, High Level Requirements, Open Questions.' +
+    '\n- LANGUAGE RULES: use succinct declarative language. No meeting references. Write as a product spec.' +
+    '\n- CRITICAL: proposedText must have NO blank lines within a section. Use single \\n between lines.' +
+    '\n- Be generous with suggestions. The reviewer can dismiss what they disagree with.' +
+    '\n\nReturn ONLY valid JSON, no other text.';
 }
 
 /**

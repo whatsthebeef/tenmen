@@ -193,6 +193,10 @@ body {
 .debug-step.error {
   color: #c5221f;
 }
+.debug-step.warning {
+  color: #b06000;
+  font-style: italic;
+}
 
 /* Task operation cards */
 .task-operation {

@@ -17,6 +17,18 @@ const FEATURE_DOC_PATTERN = /^F(\d+)\s+/i;
 
 export const api = onRequest({cors: true}, async (req, res) => {
   try {
+    gemini.clearCallLog();
+
+    // Wrap res.json to include Gemini call log when present
+    const originalJson = res.json.bind(res);
+    res.json = function(body: Record<string, unknown>) {
+      const log = gemini.getCallLog();
+      if (log.length && typeof body === "object" && body !== null) {
+        body._geminiLog = log;
+      }
+      return originalJson(body);
+    } as typeof res.json;
+
     // Extract user OAuth token from Authorization header or POST body
     const authHeader = req.headers.authorization || "";
     let userToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -53,22 +65,46 @@ export const api = onRequest({cors: true}, async (req, res) => {
           res.json({success: false, error: "Document is empty"});
           return;
         }
-        const knownFeatures = await getKnownFeatures(driveId);
-        if (!knownFeatures.length) {
-          res.json({success: false, error: "No feature docs found in drive root"});
-          return;
+        if (payload.docType === "discovery") {
+          // Discovery: use feature docs as reference (they contain Discovery tabs)
+          const featureDocs = await docs.discoverFeatureDocs(driveId);
+          const knownFeatures = featureDocs.map((d) => ({id: d.featureId, summary: d.fileName}));
+          if (!knownFeatures.length) {
+            res.json({success: false, error: "No feature docs found in drive root. Create a document first."});
+            return;
+          }
+          const result = await gemini.callGeminiForDiscoveryFeatureIdentification(content, knownFeatures);
+          const featureIds: string[] = [...(result.existingFeatureIds || [])];
+
+          res.json({
+            success: true,
+            data: {
+              fileId: payload.fileId,
+              fileName,
+              contentLength: content.length,
+              knownFeatures: knownFeatures.map((f) => f.id),
+              featureIds,
+            },
+          });
+        } else {
+          // Formulation: use feature docs as reference
+          const knownFeatures = await getKnownFeatures(driveId);
+          if (!knownFeatures.length) {
+            res.json({success: false, error: "No feature docs found in drive root"});
+            return;
+          }
+          const result = await gemini.callGeminiForFeatureIdentification(content, knownFeatures);
+          res.json({
+            success: true,
+            data: {
+              fileId: payload.fileId,
+              fileName,
+              contentLength: content.length,
+              knownFeatures: knownFeatures.map((f) => f.id),
+              featureIds: result.featureIds || [],
+            },
+          });
         }
-        const result = await gemini.callGeminiForFeatureIdentification(content, knownFeatures);
-        res.json({
-          success: true,
-          data: {
-            fileId: payload.fileId,
-            fileName,
-            contentLength: content.length,
-            knownFeatures: knownFeatures.map((f) => f.id),
-            featureIds: result.featureIds || [],
-          },
-        });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         res.json({success: false, error: msg});
@@ -164,8 +200,116 @@ export const api = onRequest({cors: true}, async (req, res) => {
     }
 
     if (action === "update_technical_notes") {
-      // Fire and forget — just return success
-      res.json({success: true});
+      if (!payload.fileId || !payload.featureId) {
+        res.status(400).json({error: "fileId and featureId required"});
+        return;
+      }
+      try {
+        const config = await firestore.getConfig();
+        const driveId = getSharedDriveId(config);
+        if (!driveId) { res.json({success: false, error: "No drive configured"}); return; }
+
+        // Find the feature doc
+        const featureDocs = await docs.discoverFeatureDocs(driveId);
+        const docInfo = featureDocs.find((d) => d.featureId === payload.featureId);
+        if (!docInfo) { res.json({success: false, error: "No feature doc for " + payload.featureId}); return; }
+
+        // Read meeting summary and existing notes
+        const summaryContent = await docs.readDocContent(payload.fileId);
+        const existingNotes = await docs.readTechnicalNotes(docInfo.fileId);
+
+        // Call Gemini to extract/merge technical notes
+        const result = await gemini.callGeminiForTechnicalNotes(summaryContent, existingNotes, payload.featureId);
+        const notes = (result.notes || []).filter((n: string) => n.trim());
+
+        if (notes.length) {
+          const notesText = notes.map((n: string) => "- " + n).join("\n");
+          await docs.writeTechnicalNotes(docInfo.fileId, notesText);
+        }
+
+        res.json({success: true, notesCount: notes.length});
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        res.json({success: false, error: msg});
+      }
+      return;
+    }
+
+    if (action === "normalize_discovery") {
+      try {
+        const config = await firestore.getConfig();
+        const driveId = getSharedDriveId(config);
+        if (!driveId) {
+          res.json({success: false, error: "No drive configured"});
+          return;
+        }
+        const featureDocs = await docs.discoverFeatureDocs(driveId);
+        const docInfo = featureDocs.find((d) => d.featureId === payload.featureId);
+        if (!docInfo) {
+          res.json({success: false, error: "No feature doc found for " + payload.featureId});
+          return;
+        }
+        // Read the Discovery tab structure
+        const structure = await docs.extractDocStructure(docInfo.fileId);
+        const structuredText = docs.formatStructureForPrompt(structure);
+        const normalizedDoc = await gemini.callGeminiForDiscoveryNormalization(structuredText, payload.featureId);
+        res.json({
+          success: true,
+          data: {normalizedDoc, docFileId: docInfo.fileId, docFileName: docInfo.fileName},
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        res.json({success: false, error: msg});
+      }
+      return;
+    }
+
+    if (action === "generate_discovery_patch_plan") {
+      try {
+        const content = await docs.readDocContent(payload.fileId);
+        const patchPlan = await gemini.callGeminiForDiscoveryPatchPlan(
+          payload.normalizedDoc, content, payload.featureId
+        );
+        const operations = patchPlan.operations || [];
+        if (!operations.length) {
+          res.json({success: true, step: payload.featureId + ": No discovery changes needed"});
+          return;
+        }
+
+        // Populate currentText for update/delete operations
+        for (const op of operations) {
+          if ((op.type === "update" || op.type === "delete") && op.storyId && !op.currentText) {
+            try {
+              const section = await docs.findSectionByHeading(payload.docFileId, op.storyId as string);
+              if (section) {
+                op.currentText = await docs.readSectionText(payload.docFileId, section);
+              }
+            } catch { /* non-fatal */ }
+          }
+        }
+
+        const patchData = {
+          patchType: "discovery",
+          featureId: payload.featureId,
+          targetDocId: payload.docFileId,
+          targetDocName: payload.docFileName || payload.featureId,
+          targetDocUrl: "https://docs.google.com/document/d/" + payload.docFileId + "/edit",
+          sourceFileName: payload.fileName,
+          sourceFileUrl: payload.fileId ? "https://docs.google.com/document/d/" + payload.fileId + "/edit" : "",
+          createdAt: new Date().toISOString(),
+          operations: operations.map((op) => ({...op, _applied: false, _dismissed: false})),
+        };
+
+        const dateStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+        const patchId = payload.featureId + "-discovery-patch-" + dateStr + "-" + Date.now();
+        await firestore.savePatch(patchId, patchData);
+
+        const stepMsg = payload.featureId + ": Created discovery patch " + patchId + " (" + operations.length + " operations)";
+        res.json({success: true, step: stepMsg});
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        res.json({success: false, error: msg});
+      }
       return;
     }
 
@@ -237,7 +381,11 @@ async function processFeatureDoc(fileId: string): Promise<{error?: string; messa
   const featureId = "F" + nameMatch[1];
 
   const currentTasks = await firestore.getAllTasks(featureId);
-  const technicalNotes = "";
+
+  // Read technical notes from the feature doc
+  const featureDocs = await docs.discoverFeatureDocs(driveId);
+  const featureDocInfo = featureDocs.find((d) => d.featureId === featureId);
+  const technicalNotes = featureDocInfo ? await docs.readTechnicalNotes(featureDocInfo.fileId) : "";
 
   const result = await gemini.callGeminiForTaskProposal(content, currentTasks as unknown as Record<string, unknown>[], featureId, technicalNotes);
 

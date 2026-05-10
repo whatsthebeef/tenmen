@@ -66,8 +66,8 @@ interface DocElement {
 export async function extractDocStructure(
   fileId: string
 ): Promise<DocElement[]> {
-  const docs = docsApi();
-  const res = await docs.documents.get({documentId: fileId});
+  const docsClient = docsApi();
+  const res = await docsClient.documents.get({documentId: fileId});
   const doc = res.data;
   const content = doc.body?.content || [];
   const elements: DocElement[] = [];
@@ -196,6 +196,43 @@ export async function findStorySection(
   return {startIndex: storyStart, endIndex: storyEnd};
 }
 
+export async function findSectionByHeading(
+  docId: string,
+  headingText: string
+): Promise<SectionBounds | null> {
+  const docsClient = docsApi();
+  const res = await docsClient.documents.get({documentId: docId});
+  const content = res.data.body?.content || [];
+
+  let sectionStart = -1;
+  let sectionEnd = -1;
+
+  for (const el of content) {
+    if (!el.paragraph) continue;
+    const text = extractParagraphText(el.paragraph);
+    const style = el.paragraph.paragraphStyle?.namedStyleType || "";
+    const isH2 = style === "HEADING_2";
+
+    if (sectionStart === -1) {
+      if (isH2 && text === headingText) {
+        sectionStart = el.startIndex || 0;
+      }
+    } else {
+      if (isH2) {
+        sectionEnd = el.startIndex || 0;
+        break;
+      }
+    }
+  }
+
+  if (sectionStart === -1) return null;
+  if (sectionEnd === -1) {
+    const lastEl = content[content.length - 1];
+    sectionEnd = (lastEl?.endIndex || 1) - 1;
+  }
+  return {startIndex: sectionStart, endIndex: sectionEnd};
+}
+
 export async function readSectionText(
   docId: string,
   section: SectionBounds
@@ -213,6 +250,53 @@ export async function readSectionText(
     text += pText;
   }
   return text;
+}
+
+export async function readTechnicalNotes(docId: string): Promise<string> {
+  const section = await findSectionByHeading(docId, "Technical Notes");
+  if (!section) return "";
+  const text = await readSectionText(docId, section);
+  // Strip the heading line
+  const lines = text.split("\n");
+  return lines.length > 1 ? lines.slice(1).join("\n").trim() : "";
+}
+
+export async function writeTechnicalNotes(docId: string, notesText: string): Promise<void> {
+  const section = await findSectionByHeading(docId, "Technical Notes");
+  const docsClient = docsApi();
+  const insertContent = "Technical Notes\n" + notesText.trim() + "\n";
+
+  if (section) {
+    await docsClient.documents.batchUpdate({
+      documentId: docId,
+      requestBody: {
+        requests: [
+          {deleteContentRange: {range: {startIndex: section.startIndex, endIndex: section.endIndex}}},
+          {insertText: {location: {index: section.startIndex}, text: insertContent}},
+        ],
+      },
+    });
+    // Style heading as H2, rest as normal
+    const doc = await docsClient.documents.get({documentId: docId});
+    const content = doc.data.body?.content || [];
+    const endIdx = section.startIndex + insertContent.length;
+    const requests: docs_v1.Schema$Request[] = [];
+    let isFirst = true;
+    for (const el of content) {
+      if (!el.paragraph) continue;
+      if ((el.startIndex || 0) < section.startIndex) continue;
+      if ((el.startIndex || 0) >= endIdx) break;
+      if (isFirst) {
+        requests.push({updateParagraphStyle: {range: {startIndex: el.startIndex!, endIndex: el.endIndex!}, paragraphStyle: {namedStyleType: "HEADING_2"}, fields: "namedStyleType"}});
+        isFirst = false;
+      } else {
+        requests.push({updateParagraphStyle: {range: {startIndex: el.startIndex!, endIndex: el.endIndex!}, paragraphStyle: {namedStyleType: "NORMAL_TEXT"}, fields: "namedStyleType"}});
+      }
+    }
+    if (requests.length) {
+      await docsClient.documents.batchUpdate({documentId: docId, requestBody: {requests}});
+    }
+  }
 }
 
 function normalizeStorySpacing(text: string): string {
@@ -395,6 +479,7 @@ export async function createFeatureDoc(
   featureName: string
 ): Promise<{fileId: string; fileName: string; url: string}> {
   const drive = driveApi();
+  const docsClient = docsApi();
   const docName = featureId + " " + featureName;
 
   const file = await drive.files.create({
@@ -407,19 +492,74 @@ export async function createFeatureDoc(
   });
 
   const fileId = file.data.id!;
-  const templateText =
-    featureId + "S1. <Role> wants to <perform function> so that they <can achieve goal>\n" +
-    "A. <First acceptance criterion>\nB. <Second acceptance criterion>\n";
 
-  const docs = docsApi();
-  await docs.documents.batchUpdate({
+  const templateText =
+    docName + "\n" +
+    "Executive Summary\n\n" +
+    "Objectives\n1. \n\n" +
+    "High Level Requirements\n1. \n\n" +
+    "Open Questions\n\n" +
+    "User Stories\n" +
+    featureId + "S1. <Role> wants to <perform function> so that they <can achieve goal>\n" +
+    "A. <First acceptance criterion>\nB. <Second acceptance criterion>\n\n" +
+    "Technical Notes\n";
+
+  await docsClient.documents.batchUpdate({
     documentId: fileId,
     requestBody: {
       requests: [{insertText: {location: {index: 1}, text: templateText}}],
     },
   });
 
-  await fixStoryParagraphStyles(fileId, 1, templateText);
+  // Style headings
+  const doc = await docsClient.documents.get({documentId: fileId});
+  const content = doc.data.body?.content || [];
+  const sectionHeadings = ["Executive Summary", "Objectives", "High Level Requirements", "Open Questions", "User Stories", "Technical Notes"];
+  const storyPattern = new RegExp("^T?" + featureId + "S\\d+", "i");
+  const requests: docs_v1.Schema$Request[] = [];
+  let titleDone = false;
+
+  for (const el of content) {
+    if (!el.paragraph) continue;
+    const text = extractParagraphText(el.paragraph);
+
+    if (!titleDone) {
+      requests.push({
+        updateParagraphStyle: {
+          range: {startIndex: el.startIndex!, endIndex: el.endIndex!},
+          paragraphStyle: {namedStyleType: "HEADING_1"},
+          fields: "namedStyleType",
+        },
+      });
+      titleDone = true;
+      continue;
+    }
+
+    if (sectionHeadings.includes(text)) {
+      requests.push({
+        updateParagraphStyle: {
+          range: {startIndex: el.startIndex!, endIndex: el.endIndex!},
+          paragraphStyle: {namedStyleType: "HEADING_2"},
+          fields: "namedStyleType",
+        },
+      });
+    } else if (storyPattern.test(text)) {
+      requests.push({
+        updateParagraphStyle: {
+          range: {startIndex: el.startIndex!, endIndex: el.endIndex!},
+          paragraphStyle: {namedStyleType: "HEADING_3"},
+          fields: "namedStyleType",
+        },
+      });
+    }
+  }
+
+  if (requests.length) {
+    await docsClient.documents.batchUpdate({
+      documentId: fileId,
+      requestBody: {requests},
+    });
+  }
 
   return {
     fileId,
@@ -439,7 +579,7 @@ function extractParagraphText(paragraph: docs_v1.Schema$Paragraph): string {
       text += el.textRun.content;
     }
   }
-  return text.replace(/\n$/, "");
+  return text.replace(/\n$/, "").trim();
 }
 
 async function fixStoryParagraphStyles(

@@ -36,10 +36,12 @@ document.addEventListener('DOMContentLoaded', function() {
   fetchAllPatches();
 
   // Action buttons — open picker then process
+  document.getElementById('btn-process-discovery').addEventListener('click', function() {
+    openPickerAndProcess('docs', _processDiscoverySummaryWithFile);
+  });
   document.getElementById('btn-process-summary').addEventListener('click', function() {
     openPickerAndProcess('docs', _processSummaryWithFile);
   });
-
   document.getElementById('btn-process-feature').addEventListener('click', function() {
     _openFeatureDocPicker(_processFeatureDocWithFile);
   });
@@ -104,17 +106,41 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================================
 
 function apiPost(url, body, callback) {
-  try {
-    chrome.runtime.sendMessage({ type: 'api_post', url: url, body: body }, function(response) {
-      if (chrome.runtime.lastError) {
-        callback({ ok: false, error: chrome.runtime.lastError.message });
+  var maxRetries = 3;
+  var baseDelay = 10000; // 10s, 20s, 40s
+
+  function doPost(attempt) {
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    .then(function(r) {
+      if ((r.status === 503 || r.status === 429 || r.status === 500) && attempt < maxRetries) {
+        var delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log('[apiPost] HTTP ' + r.status + ' attempt ' + attempt + ', retrying in ' + (delay / 1000) + 's');
+        setTimeout(function() { doPost(attempt + 1); }, delay);
         return;
       }
-      callback(response);
+      r.text().then(function(text) {
+        try {
+          callback({ ok: r.ok, data: JSON.parse(text) });
+        } catch (e) {
+          callback({ ok: false, error: 'Invalid JSON (HTTP ' + r.status + ')', raw: text.substring(0, 300) });
+        }
+      });
+    })
+    .catch(function(err) {
+      if (attempt < maxRetries) {
+        var delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log('[apiPost] Network error attempt ' + attempt + ', retrying in ' + (delay / 1000) + 's');
+        setTimeout(function() { doPost(attempt + 1); }, delay);
+        return;
+      }
+      callback({ ok: false, error: err.message });
     });
-  } catch (e) {
-    callback({ ok: false, error: e.message });
   }
+  doPost(1);
 }
 
 // apiPost with user OAuth token for endpoints that need Docs/Drive access
@@ -298,27 +324,43 @@ function renderPatchIndex() {
   indexContainer.innerHTML = '';
 
   var patches = state.allPatches || [];
-  if (!patches.length) {
-    setStatus('No patches available', 'empty');
-    return;
+  var formulationPatches = patches.filter(function(p) { return p.patchType !== 'task' && p.patchType !== 'discovery'; });
+  var discoveryPatches = patches.filter(function(p) { return p.patchType === 'discovery'; });
+  var taskPatches = patches.filter(function(p) { return p.patchType === 'task'; });
+  var hasAnyFeature = formulationPatches.length || discoveryPatches.length;
+
+  if (formulationPatches.length) {
+    var heading1 = document.createElement('div');
+    heading1.className = 'patch-index-section-heading';
+    heading1.textContent = 'Feature Document Patches — Formulation';
+    indexContainer.appendChild(heading1);
+    formulationPatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
   }
 
-  var featurePatches = patches.filter(function(p) { return p.patchType !== 'task'; });
-  var taskPatches = patches.filter(function(p) { return p.patchType === 'task'; });
+  if (discoveryPatches.length) {
+    var heading2 = document.createElement('div');
+    heading2.className = 'patch-index-section-heading';
+    heading2.textContent = 'Feature Document Patches — Discovery';
+    indexContainer.appendChild(heading2);
+    discoveryPatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
+  }
 
-  if (featurePatches.length) {
-    var heading = document.createElement('div');
-    heading.className = 'patch-index-section-heading';
-    heading.textContent = 'Feature Document Patches';
-    indexContainer.appendChild(heading);
-    featurePatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
+  if (!hasAnyFeature) {
+    var emptyHeading = document.createElement('div');
+    emptyHeading.className = 'patch-index-section-heading';
+    emptyHeading.textContent = 'Feature Document Patches';
+    indexContainer.appendChild(emptyHeading);
+    var empty = document.createElement('div');
+    empty.className = 'all-done';
+    empty.textContent = 'No patches available';
+    indexContainer.appendChild(empty);
   }
 
   if (taskPatches.length) {
-    var heading2 = document.createElement('div');
-    heading2.className = 'patch-index-section-heading';
-    heading2.textContent = 'Task List Patches';
-    indexContainer.appendChild(heading2);
+    var heading3 = document.createElement('div');
+    heading3.className = 'patch-index-section-heading';
+    heading3.textContent = 'Task List Patches';
+    indexContainer.appendChild(heading3);
     taskPatches.forEach(function(p) { indexContainer.appendChild(_buildPatchCard(p)); });
   }
 }
@@ -345,7 +387,12 @@ function _buildPatchCard(p) {
 
   var meta = document.createElement('span');
   meta.className = 'patch-index-meta';
-  meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending';
+  var dateStr = '';
+  if (p.created) {
+    var d = new Date(p.created);
+    dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  meta.textContent = p.pendingCount + ' of ' + p.operationCount + ' pending' + (dateStr ? ' · ' + dateStr : '');
   footer.appendChild(meta);
 
   if (p.sourceFileUrl) {
@@ -555,8 +602,9 @@ function renderPatch(patchInfo, patchData) {
     // Get title from operation (new format), storyAnchors, or legacy fallback
     var firstOp = storyGroups[storyKey][0].op;
     var storyTitle = firstOp.storyTitle || (anchors[storyKey] && anchors[storyKey].title) || getStoryTitle(storyGroups[storyKey]);
-    storyHeader.innerHTML = '<span class="story-id">' + escapeHtml(storyKey) + '</span> ' +
-      '<span class="story-title">' + escapeHtml(storyTitle) + '</span>';
+    var showTitle = storyTitle && storyTitle !== storyKey;
+    storyHeader.innerHTML = '<span class="story-id">' + escapeHtml(storyKey) + '</span>'
+      + (showTitle ? ' <span class="story-title">' + escapeHtml(storyTitle) + '</span>' : '');
     if (isRealStory) {
       storyHeader.style.cursor = 'pointer';
       storyHeader.addEventListener('click', (function(key) {
@@ -749,7 +797,10 @@ function renderOperation(op, index, patchId) {
   function showDiff() {
     opState.editing = false;
     if (opState.liveText && op.proposedText) {
-      diffDiv.innerHTML = buildLineDiff(opState.liveText, op.proposedText);
+      diffDiv.innerHTML = buildLineDiff(
+        _stripSectionHeading(opState.liveText, op.storyId),
+        _stripSectionHeading(op.proposedText, op.storyId)
+      );
     } else {
       diffDiv.innerHTML = buildDiffHtml(op);
     }
@@ -759,8 +810,9 @@ function renderOperation(op, index, patchId) {
     opState.editing = true;
     var textarea = document.createElement('textarea');
     textarea.className = 'op-edit-textarea';
-    textarea.value = op.proposedText || '';
-    textarea.rows = Math.max(5, (op.proposedText || '').split('\n').length + 1);
+    var editText = _stripSectionHeading(op.proposedText || '', op.storyId);
+    textarea.value = editText;
+    textarea.rows = Math.max(5, editText.split('\n').length + 1);
     diffDiv.innerHTML = '';
     diffDiv.appendChild(textarea);
 
@@ -771,7 +823,12 @@ function renderOperation(op, index, patchId) {
     doneBtn.textContent = 'Done';
     doneBtn.addEventListener('click', function(e) {
       e.stopPropagation();
-      op.proposedText = textarea.value;
+      var newText = textarea.value;
+      // Re-prepend section heading for discovery sections
+      if (_discoverySectionNames.indexOf(op.storyId) >= 0) {
+        newText = op.storyId + '\n' + newText;
+      }
+      op.proposedText = newText;
       showDiff();
     });
     var cancelBtn = document.createElement('button');
@@ -798,10 +855,36 @@ function renderOperation(op, index, patchId) {
   if (op.type === 'update' && op.storyId && state.currentPatch && state.currentPatch.targetDocId) {
     diffDiv.innerHTML = '<span style="color:#5f6368;">Loading diff...</span>';
     var docId = state.currentPatch.targetDocId;
-    googleApi.getStoryText(docId, op.storyId, function(text) {
-      if (text) opState.liveText = text;
-      showDiff();
-    });
+    var isDiscoveryPatch = state.currentPatch.patchType === 'discovery';
+
+    if (isDiscoveryPatch) {
+      // Discovery sections — find by H2 heading text
+      googleApi.findDiscoverySection(docId, op.storyId, function(section) {
+        if (!section) { showDiff(); return; }
+        googleApi.getDocument(docId, function(doc) {
+          if (!doc) { showDiff(); return; }
+          var content = (doc.body && doc.body.content) || [];
+          var lines = [];
+          for (var i = 0; i < content.length; i++) {
+            if (!content[i].paragraph) continue;
+            if ((content[i].startIndex || 0) < section.startIndex) continue;
+            if ((content[i].startIndex || 0) >= section.endIndex) break;
+            var pe = content[i].paragraph.elements || [];
+            var lt = '';
+            pe.forEach(function(el) { if (el.textRun && el.textRun.content) lt += el.textRun.content; });
+            lines.push(lt.replace(/\n$/, ''));
+          }
+          opState.liveText = lines.join('\n');
+          showDiff();
+        });
+      });
+    } else {
+      // Formulation stories — find by H3 story ID
+      googleApi.getStoryText(docId, op.storyId, function(text) {
+        if (text) opState.liveText = text;
+        showDiff();
+      });
+    }
   } else {
     showDiff();
   }
@@ -834,13 +917,22 @@ function renderOperation(op, index, patchId) {
   return div;
 }
 
+var _discoverySectionNames = ['Executive Summary', 'Objectives', 'High Level Requirements', 'Open Questions'];
+
+function _stripSectionHeading(text, storyId) {
+  if (!text || _discoverySectionNames.indexOf(storyId) < 0) return text;
+  var lines = text.split('\n');
+  if (lines.length > 1 && lines[0] === storyId) return lines.slice(1).join('\n');
+  return text;
+}
+
 function buildDiffHtml(op) {
   var html = '';
   var type = op.type;
 
-  // Story-level operations (new format)
-  var text = op.proposedText || op.new_text || op.text || '';
-  var currentText = op.currentText || op.match_text || '';
+  // Story-level operations (new format) — strip section heading for discovery
+  var text = _stripSectionHeading(op.proposedText || op.new_text || op.text || '', op.storyId);
+  var currentText = _stripSectionHeading(op.currentText || op.match_text || '', op.storyId);
 
   if (type === 'update' && text) {
     // For updates, the diff is computed asynchronously with live text — show proposed as fallback
@@ -990,6 +1082,24 @@ function _doApplyOperation(patchId, operationIndex, op, force, callback) {
     } else {
       callback(false, 'Unknown operation type');
     }
+  } else if (patchData.patchType === 'discovery') {
+    // Discovery doc patch — apply section-level operations
+    var targetDocId = patchData.targetDocId;
+    if (op.type === 'update') {
+      googleApi.applyDiscoverySectionUpdate(targetDocId, op.storyId, op.proposedText, force, function(success, err) {
+        callback(success, err);
+      });
+    } else if (op.type === 'create') {
+      googleApi.applyDiscoverySectionCreate(targetDocId, op.proposedText, force, function(success, err) {
+        callback(success, err);
+      });
+    } else if (op.type === 'delete') {
+      googleApi.applyDiscoverySectionDelete(targetDocId, op.storyId, force, function(success, err) {
+        callback(success, err);
+      });
+    } else {
+      callback(false, 'Unknown operation type');
+    }
   } else {
     // Feature doc patch — apply to Google Doc
     var targetDocId = patchData.targetDocId;
@@ -1121,6 +1231,7 @@ function loadSettings() {
     _setSettingsInputsEnabled(true);
     document.getElementById('setting-gemini-key').value = d.GEMINI_API_KEY || '';
     document.getElementById('setting-gemini-model').value = d.GEMINI_MODEL || '';
+    document.getElementById('setting-gemini-fallback').value = d.GEMINI_FALLBACK || '';
     document.getElementById('setting-jira-email').value = d.JIRA_EMAIL || '';
     document.getElementById('setting-jira-token').value = d.JIRA_TOKEN || '';
     document.getElementById('setting-jira-project').value = d.JIRA_PROJECT || '';
@@ -1197,6 +1308,7 @@ function saveSettings() {
   var updates = {
     GEMINI_API_KEY: document.getElementById('setting-gemini-key').value.trim(),
     GEMINI_MODEL: document.getElementById('setting-gemini-model').value.trim(),
+    GEMINI_FALLBACK: document.getElementById('setting-gemini-fallback').value.trim(),
     JIRA_EMAIL: document.getElementById('setting-jira-email').value.trim(),
     JIRA_TOKEN: document.getElementById('setting-jira-token').value.trim(),
     JIRA_PROJECT: document.getElementById('setting-jira-project').value.trim(),
@@ -1678,7 +1790,6 @@ function _loadDocList(driveId) {
   document.getElementById('doc-detail').style.display = 'none';
   document.getElementById('docs-empty').style.display = 'none';
 
-  // Show cached docs immediately if available
   if (state._featureDocs && state._featureDocs.length) {
     _renderDocList(state._featureDocs);
   } else {
@@ -1686,7 +1797,6 @@ function _loadDocList(driveId) {
     document.getElementById('docs-list').innerHTML = '';
   }
 
-  // Fetch fresh in background via Google API directly
   googleApi.listFeatureDocs(driveId, function(docs, err) {
     document.getElementById('docs-loading').style.display = 'none';
     if (state.activeView !== 'docs') return;
@@ -1697,22 +1807,21 @@ function _loadDocList(driveId) {
       document.getElementById('docs-empty').style.display = 'block';
       return;
     }
-    state._featureDocs = docs;
-    if (!docs.length) {
+    state._featureDocs = docs || [];
+    if (!state._featureDocs.length) {
       document.getElementById('docs-list').innerHTML = '';
-      document.getElementById('docs-empty').textContent = 'No feature documents found';
+      document.getElementById('docs-empty').textContent = 'No documents found';
       document.getElementById('docs-empty').style.display = 'block';
       return;
     }
     document.getElementById('docs-empty').style.display = 'none';
-    _renderDocList(docs);
+    _renderDocList(state._featureDocs);
   });
 }
 
 function _renderDocList(docs) {
   var container = document.getElementById('docs-list');
   container.innerHTML = '';
-  // Sort by feature ID numerically
   docs.sort(function(a, b) {
     var na = parseInt((a.featureId || '').replace(/\D/g, '')) || 0;
     var nb = parseInt((b.featureId || '').replace(/\D/g, '')) || 0;
@@ -1791,6 +1900,76 @@ function showNewDocForm() {
   });
 }
 
+function _renderDiscoverySections(docId, parentContainer, sections) {
+  var container = parentContainer || document.getElementById('doc-detail-stories');
+  if (!parentContainer) container.innerHTML = '';
+  var items = sections || state._docStories;
+
+  items.forEach(function(section) {
+    var card = document.createElement('div');
+    card.className = 'story-edit-card';
+
+    var body = document.createElement('div');
+    body.className = 'story-edit-body';
+    // Show text without the heading line
+    var lines = (section.text || '').split('\n');
+    body.textContent = lines.length > 1 ? lines.slice(1).join('\n') : '';
+    card.appendChild(body);
+
+    // Click to edit
+    body.addEventListener('click', (function(s, bodyEl, cardEl) {
+      return function() {
+        if (cardEl.querySelector('.task-detail-textarea')) return;
+        var textarea = document.createElement('textarea');
+        textarea.className = 'task-detail-textarea';
+        textarea.value = s.text || '';
+        textarea.rows = Math.max(3, (textarea.value.split('\n').length) + 1);
+        bodyEl.style.display = 'none';
+        cardEl.appendChild(textarea);
+
+        var btnRow = document.createElement('div');
+        btnRow.className = 'task-detail-edit-actions';
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'op-edit-done';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', function() {
+          var newText = textarea.value;
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+          googleApi.applyDiscoverySectionUpdate(docId, s.sectionId || s.storyId, newText, true, function(success, err) {
+            if (success) {
+              s.text = newText;
+              var updatedLines = newText.split('\n');
+              bodyEl.textContent = updatedLines.length > 1 ? updatedLines.slice(1).join('\n') : '';
+              bodyEl.style.display = '';
+              textarea.remove();
+              btnRow.remove();
+            } else {
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Save';
+              alert(err || 'Save failed');
+            }
+          });
+        });
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'op-edit-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', function() {
+          bodyEl.style.display = '';
+          textarea.remove();
+          btnRow.remove();
+        });
+        btnRow.appendChild(saveBtn);
+        btnRow.appendChild(cancelBtn);
+        cardEl.appendChild(btnRow);
+        textarea.focus();
+      };
+    })(section, body, card));
+
+    container.appendChild(card);
+  });
+}
+
 function openDocDetail(doc) {
   state._currentDoc = doc;
   document.getElementById('docs-list').style.display = 'none';
@@ -1805,32 +1984,27 @@ function openDocDetail(doc) {
   var header = document.getElementById('doc-detail-header');
   var docUrl = 'https://docs.google.com/document/d/' + doc.fileId + '/edit';
   header.innerHTML = '<div class="doc-detail-title">' + escapeHtml(doc.fileName || doc.featureId) + '</div>'
-    + '<div style="padding:0 12px;display:flex;align-items:center;gap:8px;">'
-    + '<a href="' + docUrl + '" target="_blank" class="action-btn" id="btn-open-doc" style="font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;text-decoration:none;">Open</a>'
+    + '<div style="padding:0 12px 8px;display:flex;align-items:center;gap:8px;">'
+    + '<a href="' + docUrl + '" target="_blank" class="action-btn" style="font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;text-decoration:none;">Open</a>'
     + '<button class="action-btn" id="btn-archive-doc" style="font-size:11px;padding:4px 10px;background:#e8f0fe;color:#1a73e8;border:1px solid #d2e3fc;">Archive</button>'
     + '<button class="action-btn" id="btn-delete-doc" style="font-size:11px;padding:4px 10px;background:#fce8e6;color:#c5221f;border:1px solid #f5c6cb;">Delete</button>'
     + '</div>';
 
   document.getElementById('btn-archive-doc').addEventListener('click', function() {
-    if (!confirm('Archive "' + doc.fileName + '"? It will be moved to the Archive folder.')) return;
+    if (!confirm('Archive "' + doc.fileName + '"?')) return;
     var btn = this;
     btn.disabled = true;
     btn.textContent = 'Archiving...';
-    var driveId = state._selectedDriveId || '';
-    googleApi.archiveFeatureDoc(doc.fileId, driveId, function(success) {
+    googleApi.archiveFeatureDoc(doc.fileId, state._selectedDriveId || '', function(success) {
       if (success) {
         state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== doc.fileId; });
         backToDocList();
-        _renderDocList(state._featureDocs);
-      } else {
-        btn.disabled = false;
-        btn.textContent = 'Archive';
-      }
+      } else { btn.disabled = false; btn.textContent = 'Archive'; }
     });
   });
 
   document.getElementById('btn-delete-doc').addEventListener('click', function() {
-    if (!confirm('Delete feature document "' + doc.fileName + '"? This moves it to trash.')) return;
+    if (!confirm('Delete "' + doc.fileName + '"?')) return;
     var btn = this;
     btn.disabled = true;
     btn.textContent = 'Deleting...';
@@ -1838,34 +2012,100 @@ function openDocDetail(doc) {
       if (success) {
         state._featureDocs = (state._featureDocs || []).filter(function(fd) { return fd.fileId !== doc.fileId; });
         backToDocList();
-        _renderDocList(state._featureDocs);
-      } else {
-        btn.disabled = false;
-        btn.textContent = 'Delete';
-      }
+      } else { btn.disabled = false; btn.textContent = 'Delete'; }
     });
   });
 
+  // Load discovery sections and user stories together
   var storiesContainer = document.getElementById('doc-detail-stories');
-  storiesContainer.innerHTML = '<div class="loading">Loading stories...</div>';
-
+  storiesContainer.innerHTML = '<div class="loading">Loading...</div>';
   document.getElementById('btn-add-story').style.display = '';
   document.getElementById('doc-detail-message').style.display = 'none';
 
-  googleApi.getFeatureDocStories(doc.fileId, function(result, err) {
-    storiesContainer.innerHTML = '';
-    if (err || !result) {
-      storiesContainer.innerHTML = '<div style="padding:12px;color:#c5221f;">Failed to load stories: ' + (err || '') + '</div>';
-      return;
+  var pending = 2;
+  var discoverySections = [];
+  var formStories = [];
+
+  function _makeCollapsible(title, contentFn, startOpen) {
+    var wrapper = document.createElement('div');
+    wrapper.style.cssText = 'border-top:1px solid #e0e0e0;';
+
+    var header = document.createElement('div');
+    header.style.cssText = 'padding:10px 12px;font-size:13px;font-weight:600;color:#5f6368;cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none;';
+    var arrow = document.createElement('span');
+    arrow.style.cssText = 'font-size:10px;transition:transform 0.15s;';
+    arrow.textContent = '\u25B6';
+    header.appendChild(arrow);
+    var label = document.createElement('span');
+    label.textContent = title;
+    header.appendChild(label);
+
+    var body = document.createElement('div');
+    body.style.overflow = 'hidden';
+
+    if (startOpen) {
+      body.style.display = '';
+      arrow.style.transform = 'rotate(90deg)';
+    } else {
+      body.style.display = 'none';
     }
-    state._docStories = result.stories || [];
-    _renderDocStories(doc.fileId);
+
+    header.addEventListener('click', function() {
+      if (body.style.display === 'none') {
+        body.style.display = '';
+        arrow.style.transform = 'rotate(90deg)';
+      } else {
+        body.style.display = 'none';
+        arrow.style.transform = '';
+      }
+    });
+
+    contentFn(body);
+    wrapper.appendChild(header);
+    wrapper.appendChild(body);
+    return wrapper;
+  }
+
+  function renderAll() {
+    pending--;
+    if (pending > 0) return;
+    storiesContainer.innerHTML = '';
+
+    // Discovery sections — each in its own collapsible
+    discoverySections.forEach(function(section) {
+      storiesContainer.appendChild(_makeCollapsible(
+        section.sectionId || section.storyId,
+        function(container) {
+          _renderDiscoverySections(doc.fileId, container, [section]);
+        },
+        false
+      ));
+    });
+
+    // User Stories — open by default
+    if (formStories.length) {
+      storiesContainer.appendChild(_makeCollapsible('User Stories', function(container) {
+        state._docStories = formStories;
+        _renderDocStories(doc.fileId, container);
+      }, true));
+    }
+
+  }
+
+  googleApi.getDiscoveryDocSections(doc.fileId, function(result) {
+    discoverySections = (result && result.sections) || [];
+    renderAll();
+  });
+
+  googleApi.getFeatureDocStories(doc.fileId, function(result) {
+    formStories = (result && result.stories) || [];
+    renderAll();
   });
 }
 
-function _renderDocStories(docId) {
-  var container = document.getElementById('doc-detail-stories');
-  container.innerHTML = '';
+function _renderDocStories(docId, parentContainer) {
+  var container = parentContainer || document.getElementById('doc-detail-stories');
+  if (!parentContainer) container.innerHTML = '';
 
   state._docStories.forEach(function(story) {
     var card = document.createElement('div');
@@ -2070,6 +2310,8 @@ function _searchDriveFiles(query) {
   googleApi.searchFiles(query, function(data, err) {
     if (err) { statusEl.textContent = 'Error: ' + err; return; }
     var files = (data && data.files) || [];
+        // Filter out feature documents (F<number> prefix)
+        files = files.filter(function(f) { return !/^F\d+\s+/i.test(f.name); });
         if (!files.length) {
           statusEl.textContent = 'No documents found';
           return;
@@ -2115,12 +2357,13 @@ function _processSummaryWithFile(fileId, fileName) {
   updateDebug('Processing');
 
   apiPostWithToken(state.webAppUrl, { action: 'identify_features', fileId: fileId }, function(response) {
+    _appendGeminiLog(steps, response);
     if (!response || !response.ok || !response.data || !response.data.success) {
       var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
       steps.push('ERROR: ' + err);
       updateDebug('Error');
       btn.disabled = false;
-      btn.textContent = 'Process Meeting Summary';
+      btn.textContent = 'Process Formulation Meeting';
       return;
     }
 
@@ -2132,7 +2375,7 @@ function _processSummaryWithFile(fileId, fileName) {
       steps.push('Gemini found no relevant features');
       updateDebug('Processing complete');
       btn.disabled = false;
-      btn.textContent = 'Process Meeting Summary';
+      btn.textContent = 'Process Formulation Meeting';
       return;
     }
 
@@ -2148,33 +2391,33 @@ function _processSummaryWithFile(fileId, fileName) {
           ? 'Processing completed with errors' : 'Processing complete';
         updateDebug(title);
         btn.disabled = false;
-        btn.textContent = 'Process Meeting Summary';
+        btn.textContent = 'Process Formulation Meeting';
         if (hasPatch) setTimeout(function() { fetchAllPatches(); }, 1000);
         return;
       }
 
       var fId = featureIds.shift();
-      btn.textContent = 'Normalizing ' + fId + '...';
-      steps.push(fId + ': Normalizing...');
+      btn.textContent = 'Processing ' + fId + '...';
+      steps.push(fId + ': Normalizing & updating technical notes...');
       updateDebug('Processing');
 
-      apiPostWithToken(state.webAppUrl, {
-        action: 'update_technical_notes', fileId: idData.fileId, featureId: fId,
-      }, function() { /* fire and forget */ });
+      // Run normalization and technical notes update in parallel
+      var normResult = null, normErr = null;
+      var techDone = false, normDone = false;
 
-      apiPostWithToken(state.webAppUrl, {
-        action: 'normalize_feature', fileId: idData.fileId, featureId: fId,
-      }, function(normResp) {
-        steps.pop();
-        if (!normResp || !normResp.ok || !normResp.data || !normResp.data.success) {
-          var err = (normResp && normResp.data && normResp.data.error) || 'Unknown error';
+      function onBothDone() {
+        if (!techDone || !normDone) return;
+        steps.pop(); // remove "Normalizing & updating..."
+
+        if (normErr || !normResult || !normResult.ok || !normResult.data || !normResult.data.success) {
+          var err = (normResult && normResult.data && normResult.data.error) || (normResult && normResult.error) || (normResult && normResult.raw) || normErr || 'Unknown error';
           steps.push(fId + ': ERROR normalizing: ' + err);
           updateDebug('Processing');
           processNext();
           return;
         }
 
-        var normData = normResp.data.data;
+        var normData = normResult.data.data;
         btn.textContent = 'Generating patch for ' + fId + '...';
         steps.push(fId + ': Generating patch plan...');
         updateDebug('Processing');
@@ -2186,6 +2429,7 @@ function _processSummaryWithFile(fileId, fileName) {
           docFileId: normData.docFileId, docFileName: normData.docFileName,
         }, function(patchResp) {
           steps.pop();
+          _appendGeminiLog(steps, patchResp);
           if (patchResp && patchResp.ok && patchResp.data && patchResp.data.step) {
             steps.push(patchResp.data.step);
             if (patchResp.data.step.indexOf('Created patch') >= 0) hasPatch = true;
@@ -2196,6 +2440,30 @@ function _processSummaryWithFile(fileId, fileName) {
           updateDebug('Processing');
           processNext();
         });
+      }
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'update_technical_notes', fileId: idData.fileId, featureId: fId,
+      }, function(techResp) {
+        _appendGeminiLog(steps, techResp);
+        if (techResp && techResp.ok && techResp.data && techResp.data.success) {
+          var count = techResp.data.notesCount || 0;
+          if (count) steps.push(fId + ': Updated technical notes (' + count + ' items)');
+        } else if (techResp && techResp.data && techResp.data.error) {
+          steps.push(fId + ': Technical notes error: ' + techResp.data.error);
+        }
+        updateDebug('Processing');
+        techDone = true;
+        onBothDone();
+      });
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'normalize_feature', fileId: idData.fileId, featureId: fId,
+      }, function(normResp) {
+        _appendGeminiLog(steps, normResp);
+        normResult = normResp;
+        normDone = true;
+        onBothDone();
       });
     }
 
@@ -2228,6 +2496,136 @@ function _processFeatureDocWithFile(fileId, fileName) {
       _showDebugCard(debugEl, 'Complete', ['Selected: ' + (fileName || fileId), data.message || 'Feature document processed']);
       setTimeout(function() { fetchAllPatches(); }, 1000);
     }
+  });
+}
+
+function _processDiscoverySummaryWithFile(fileId, fileName) {
+  var debugEl = document.getElementById('debug-output');
+  debugEl.style.display = 'none';
+  var steps = [];
+  var btn = document.getElementById('btn-process-discovery');
+  btn.disabled = true;
+
+  function updateDebug(title) {
+    _showDebugCard(debugEl, title, steps);
+  }
+
+  btn.textContent = 'Identifying features...';
+  steps.push('Selected: ' + (fileName || fileId));
+  steps.push('Identifying relevant features...');
+  updateDebug('Processing');
+
+  apiPostWithToken(state.webAppUrl, { action: 'identify_features', fileId: fileId, docType: 'discovery' }, function(response) {
+    _appendGeminiLog(steps, response);
+    if (!response || !response.ok || !response.data || !response.data.success) {
+      var err = (response && response.data && response.data.error) || (response && response.error) || 'Unknown error';
+      steps.push('ERROR: ' + err);
+      updateDebug('Error');
+      btn.disabled = false;
+      btn.textContent = 'Process Discovery Meeting';
+      return;
+    }
+
+    var idData = response.data.data;
+    steps.push('Read summary (' + idData.contentLength + ' chars)');
+    steps.push('Found ' + idData.knownFeatures.length + ' existing discovery doc(s)');
+
+    if (!idData.featureIds.length) {
+      steps.push('Gemini found no relevant features');
+      updateDebug('Processing complete');
+      btn.disabled = false;
+      btn.textContent = 'Process Discovery Meeting';
+      return;
+    }
+
+    steps.push('Gemini identified features: ' + idData.featureIds.join(', '));
+    updateDebug('Processing');
+
+    var featureIds = idData.featureIds.slice();
+    var hasPatch = false;
+
+    function processNext() {
+      if (!featureIds.length) {
+        var title = steps.some(function(s) { return s.indexOf('ERROR') >= 0; })
+          ? 'Processing completed with errors' : 'Processing complete';
+        updateDebug(title);
+        btn.disabled = false;
+        btn.textContent = 'Process Discovery Meeting';
+        if (hasPatch) setTimeout(function() { fetchAllPatches(); }, 1000);
+        return;
+      }
+
+      var fId = featureIds.shift();
+      btn.textContent = 'Processing ' + fId + '...';
+      steps.push(fId + ': Normalizing & updating technical notes...');
+      updateDebug('Processing');
+
+      var normResult = null, normErr = null;
+      var techDone = false, normDone = false;
+
+      function onBothDone() {
+        if (!techDone || !normDone) return;
+        steps.pop();
+
+        if (normErr || !normResult || !normResult.ok || !normResult.data || !normResult.data.success) {
+          var err = (normResult && normResult.data && normResult.data.error) || (normResult && normResult.error) || (normResult && normResult.raw) || normErr || 'Unknown error';
+          steps.push(fId + ': ERROR normalizing: ' + err);
+          updateDebug('Processing');
+          processNext();
+          return;
+        }
+
+        var normData = normResult.data.data;
+        btn.textContent = 'Generating discovery patch for ' + fId + '...';
+        steps.push(fId + ': Generating discovery patch...');
+        updateDebug('Processing');
+
+        apiPostWithToken(state.webAppUrl, {
+          action: 'generate_discovery_patch_plan',
+          fileId: idData.fileId, fileName: idData.fileName, featureId: fId,
+          normalizedDoc: normData.normalizedDoc,
+          docFileId: normData.docFileId, docFileName: normData.docFileName,
+        }, function(patchResp) {
+          steps.pop();
+          _appendGeminiLog(steps, patchResp);
+          if (patchResp && patchResp.ok && patchResp.data && patchResp.data.step) {
+            steps.push(patchResp.data.step);
+            if (patchResp.data.step.indexOf('Created') >= 0) hasPatch = true;
+          } else {
+            var err = (patchResp && patchResp.data && patchResp.data.error) || 'Unknown error';
+            steps.push(fId + ': ERROR: ' + err);
+          }
+          updateDebug('Processing');
+          processNext();
+        });
+      }
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'update_technical_notes', fileId: idData.fileId, featureId: fId,
+      }, function(techResp) {
+        _appendGeminiLog(steps, techResp);
+        if (techResp && techResp.ok && techResp.data && techResp.data.success) {
+          var count = techResp.data.notesCount || 0;
+          if (count) steps.push(fId + ': Updated technical notes (' + count + ' items)');
+        } else if (techResp && techResp.data && techResp.data.error) {
+          steps.push(fId + ': Technical notes error: ' + techResp.data.error);
+        }
+        updateDebug('Processing');
+        techDone = true;
+        onBothDone();
+      });
+
+      apiPostWithToken(state.webAppUrl, {
+        action: 'normalize_discovery', fileId: idData.fileId, featureId: fId,
+      }, function(normResp) {
+        _appendGeminiLog(steps, normResp);
+        normResult = normResp;
+        normDone = true;
+        onBothDone();
+      });
+    }
+
+    processNext();
   });
 }
 
@@ -2488,12 +2886,21 @@ function _resetReloadBtn() {
   }
 }
 
+function _appendGeminiLog(steps, response) {
+  if (response && response.data && response.data._geminiLog) {
+    response.data._geminiLog.forEach(function(msg) {
+      steps.push('\u26A0 ' + msg);
+    });
+  }
+}
+
 function _showDebugCard(el, title, steps) {
   el.innerHTML = '<div class="debug-header"><span>' + escapeHtml(title) + '</span>'
     + '<button class="debug-dismiss">Dismiss</button></div>'
     + '<div class="debug-steps">'
     + steps.map(function(s) {
-        var cls = (s.indexOf('ERROR') === 0 || s.indexOf('error') === 0 || s.indexOf('Connection') === 0) ? 'debug-step error' : 'debug-step';
+        var cls = (s.indexOf('ERROR') === 0 || s.indexOf('error') === 0 || s.indexOf('Connection') === 0) ? 'debug-step error'
+          : s.indexOf('\u26A0') === 0 ? 'debug-step warning' : 'debug-step';
         return '<div class="' + cls + '">' + escapeHtml(s) + '</div>';
       }).join('')
     + '</div>';
